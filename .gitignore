@@ -1,0 +1,51 @@
+# ---------------------------------------------------------------- secrets
+# `roots join` writes these per team. They carry the SupplyHub token and the
+# team's Postgres password. Never commit them.
+.env
+config/team.yaml
+
+# `lab export-configs` writes one team.yaml per team, each with credentials.
+# The CLI default is ./team-configs relative to wherever it is run, so this is
+# unanchored on purpose.
+team-configs/
+
+# Astro stores local connections here, passwords included, if you use it.
+airflow_settings.yaml
+
+# ------------------------------------------------------------ local runtime
+# Dagster's instance: event log, run history, compute logs. Regenerated on
+# every run and machine-specific. `roots join` creates the directory.
+.dagster/
+
+# roots' local milestone state and its offline submission queue.
+.roots/
+
+# Deliveries fetched from SupplyHub and the cleaned output. All generated, and
+# team-specific -- committing it would ship one team's data to everyone.
+data/
+
+# Where the Airflow container writes (mounted by Astro).
+include/data/
+
+# The lab server's SQLite state: teams, tokens, join codes, milestones.
+lab/lab_state.sqlite3*
+
+# ------------------------------------------------------------------- Airflow
+logs/
+airflow.db
+airflow-webserver.pid
+.astro/*.lock
+# NOTE: .astro/config.yaml IS tracked -- it is what makes this an Astro project.
+
+# -------------------------------------------------------------------- Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ------------------------------------------------------------------------ OS
+.DS_Store
+Thumbs.db

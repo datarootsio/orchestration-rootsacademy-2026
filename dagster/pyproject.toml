@@ -1,0 +1,29 @@
+[project]
+name = "rootsmarkt-dagster"
+version = "1.0.0"
+description = "Dagster project for the Rootsmarkt orchestration course"
+requires-python = ">=3.12,<3.13"
+dependencies = ["dagster==1.13.14", "rootsmarkt-processing"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rootsmarkt"]
+
+[tool.dg]
+directory_type = "project"
+
+[tool.dg.project]
+root_module = "rootsmarkt"
+# Without this the code location is named after the directory ("dagster"), which
+# reads as a tool name rather than a project in the Dagster UI.
+code_location_name = "rootsmarkt"
+
+[tool.dg.cli]
+# The venv lives at the REPO ROOT, not in this project directory, because the
+# root is also the Astro project (decision D-023) and Airflow + Dagster must not
+# share a lockfile (D-002). `dg` warns about that mismatch on every command; the
+# arrangement is deliberate, so the warning is noise.
+suppress_warnings = ["project_and_activated_venv_mismatch"]

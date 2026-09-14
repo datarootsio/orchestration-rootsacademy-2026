@@ -1,0 +1,36 @@
+# Participant environment: Dagster + the CLI + the sealed processing layer.
+#
+# Airflow is NOT here, deliberately (decision D-002). It lives only in the Astro
+# Docker image built from ./Dockerfile. Resolving Airflow 3.3 and Dagster 1.13
+# into one lockfile is a known trap, and CLAUDE.md states that dependency
+# resolution must not become a learning objective.
+[project]
+name = "rootsmarkt-orchestration"
+version = "1.0.0"
+description = "Rootsmarkt orchestration course — participant environment"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "dagster==1.13.14",
+    "dagster-webserver==1.13.14",
+    "dagster-dg-cli==1.13.14",
+    "rootsmarkt-processing",
+    "rootsmarkt-dagster",
+    "roots-cli",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3"]
+
+[tool.uv]
+# An environment, not a distributable package.
+package = false
+
+[tool.uv.sources]
+rootsmarkt-processing = { path = "packages/rootsmarkt-processing", editable = true }
+rootsmarkt-dagster = { path = "dagster", editable = true }
+roots-cli = { path = "cli", editable = true }
+
+[tool.pytest.ini_options]
+# tests/dags/ is collected too, but its conftest skips it unless Airflow is
+# importable -- those run in the container via `astro dev pytest`.
+testpaths = ["dagster/tests", "tools/tests", "tests"]

@@ -1,0 +1,28 @@
+# Airflow itself and its providers come from the Astro Runtime image. Do NOT pin
+# apache-airflow here -- that fights the image, and the base image's
+# install-python-dependencies script rejects it outright.
+#
+# Airflow deps are deliberately separate from the root pyproject.toml, which
+# holds Dagster (decision D-002). Nothing resolves both into one lockfile.
+#
+# NOTE: the sealed processing layer is NOT installed from this file. It is a
+# local path, and this file is installed by an ONBUILD trigger that runs BEFORE
+# the build context is copied -- so the directory does not exist yet and the
+# build fails with "Distribution not found". It is installed by an explicit RUN
+# in the Dockerfile instead. See the comment there.
+#
+# The processing layer's own dependencies (psycopg, pyyaml) come with it.
+#
+# The Postgres provider, however, is NOT in the Astro Runtime base image. That
+# image ships only common-sql and standard, so conn type `postgres` has no
+# registered hook and SQLExecuteQueryOperator fails at runtime with:
+#
+#   AirflowException: Unknown hook type "postgres"
+#
+# SQLExecuteQueryOperator itself comes from common-sql (present); the HOOK comes
+# from here. Pinned per CLAUDE.md -- it is absent from /etc/pip-constraints.txt,
+# so the pin is ours to hold. Needs common-sql>=1.32.0 (image has 2.0.1).
+#
+# Unlike the sealed processing layer, this is a PyPI package, so it installs
+# cleanly in the ONBUILD step (see the Dockerfile for why local paths cannot).
+apache-airflow-providers-postgres==7.0.2
