@@ -527,6 +527,28 @@ def doctor(report: bool = typer.Option(False, help="Terse output for the instruc
 
     def _lab() -> None:
         base = api.lab_url()
+
+        # SupplyHub is a SEPARATE address from the progress API, and the two fail
+        # independently. `join` takes SUPPLYHUB_BASE_URL from what the lab server
+        # advertised about itself (LAB_PUBLIC_URL), not from --lab-url. If the
+        # instructor has not run `lab host`, the lab advertises "localhost" --
+        # which on this machine means THIS machine -- and `roots join` still
+        # succeeds. Mission A1 is then the first thing to notice, twenty minutes
+        # later and several layers from the cause.
+        supplyhub = os.environ.get("SUPPLYHUB_BASE_URL", "")
+        if supplyhub:
+            if _is_loopback(supplyhub) and not _is_loopback(base):
+                fail(
+                    f"SUPPLYHUB_BASE_URL is {supplyhub} but the lab is at {base}. "
+                    "You were handed a local address by a remote lab, so SupplyHub "
+                    "would resolve to your own machine and mission A1 would fail. "
+                    "Ask your instructor to run `lab host`, then `roots join` again."
+                )
+            elif api.healthy(supplyhub):
+                _ok(f"SupplyHub at {supplyhub} reachable")
+            else:
+                fail(f"SupplyHub at {supplyhub} is unreachable -- A1 cannot fetch a delivery")
+
         if api.healthy(base):
             _ok(f"{base} reachable")
         else:
@@ -1036,6 +1058,23 @@ if _solutions_dir().is_dir():
 
         typer.echo(f"\n  Stubs backed up to {backup_root.relative_to(root)}")
         typer.echo("  Undo with: roots solution all --restore")
+
+
+def _is_loopback(url_or_host: str) -> bool:
+    """Whether an address points back at the machine asking.
+
+    Used to catch a remote lab handing out a local address -- the one
+    misconfiguration that leaves `roots join` reporting success and everything
+    after it failing.
+    """
+    from urllib.parse import urlsplit
+
+    host = urlsplit(url_or_host).hostname if "//" in url_or_host else url_or_host
+    if not host:
+        return False
+    if host in {"localhost", "0.0.0.0", "::1"}:
+        return True
+    return host.startswith("127.")
 
 
 def _warehouse_diagnosis(dsn: str, exc: Exception) -> list[str]:

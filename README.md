@@ -15,78 +15,208 @@ Airflow, once in Dagster — and work out what the system should have known.
 
 ---
 
-## Setup
+# Setup
 
-Do this **days before the course**, not on the morning. If something is going to
-go wrong, it should go wrong while there is time to fix it.
+**Do this days before the course, not on the morning.** If something is going to
+go wrong, it should go wrong while there is time to fix it. Budget 30 minutes,
+most of it waiting for a Docker image.
+
+Six steps, in this order. Each one tells you how to know it worked.
+
+> **Windows:** run everything in **PowerShell** — not in WSL, not in Git Bash.
+> The commands below are identical on both platforms; they are program
+> invocations, not shell syntax. [`WINDOWS-SETUP.md`](WINDOWS-SETUP.md) has the
+> full walkthrough.
+
+---
+
+## Step 1 — Install the prerequisites
+
+You need three things: **Docker Desktop**, **uv**, and the **Astro CLI**.
+
+**macOS**
+
+```bash
+brew install --cask docker          # then OPEN it, and leave it running
+brew install uv
+brew install astronomer/tap/astro@1.42.1 --without-podman
+```
+
+**Windows** (PowerShell)
+
+```powershell
+winget install -e --id Docker.DockerDesktop
+winget install -e --id astral-sh.uv
+winget install -e --id Astronomer.Astro -v 1.42.1 --skip-dependencies
+```
+
+Then, on either platform, pull the Airflow image now rather than on the day:
+
+```bash
+docker pull astrocrpublic.azurecr.io/runtime:3.3-2
+```
+
+**✓ Done when** all three report a version:
+
+```bash
+docker info --format "{{.ServerVersion}}"     # a number, not an error
+uv --version
+astro version                                 # 1.42.1
+```
+
+**If it fails**
+- `astro version` says something other than 1.42.1 → you installed the wrong
+  formula. On macOS it must be `astronomer/tap/astro@1.42.1`, not plain
+  `brew install astro`. The `--without-podman` / `--skip-dependencies` flag
+  matters too: without it you get Podman, and this course assumes Docker.
+- `docker info` errors → Docker Desktop is installed but not *running*. Open it.
+
+---
+
+## Step 2 — Get the repository
+
+```bash
+git clone <the URL your instructor gave you> rootsmarkt-orchestration
+cd rootsmarkt-orchestration
+```
+
+Keep the path **short and local** — `C:\dev\...` or `~/dev/...`. Not a network
+drive, not OneDrive, not a folder twelve levels deep. Windows has a
+260-character path limit that Docker mounts can hit.
+
+**✓ Done when** `ls` (or `dir`) shows `missions/`, `dags/` and `pyproject.toml`.
+
+---
+
+## Step 3 — Install the Python environment
 
 ```bash
 uv sync
-uv run roots join <your-team-code>
+```
+
+This creates `.venv/` and installs Dagster, the `roots` CLI and the sealed
+processing package. It does **not** install Airflow — that lives only inside the
+Docker image, deliberately.
+
+**✓ Done when**
+
+```bash
+uv run roots --help
+```
+
+lists commands including `join`, `doctor`, `verify` and `hint`.
+
+**If it fails** — a resolution error here usually means a stale `.venv`. Delete
+it and re-run.
+
+---
+
+## Step 4 — Join your team
+
+Your instructor gives you a **join code** — six characters, like `RMEETP`.
+
+```bash
+uv run roots join RMEETP
+```
+
+**You do not create `.env` yourself.** This command creates both files you need:
+
+| File | What it holds | Committed? |
+|---|---|---|
+| `config/team.yaml` | your store roster, plausible revenue bounds, warehouse credentials, SupplyHub token | No — it has secrets |
+| `.env` | the same values as environment variables, which is what Airflow and Dagster read | No — same reason |
+
+They hold the same information in two shapes because two different runtimes need
+it two different ways. Never edit either by hand — if something is wrong, run
+`roots join` again.
+
+> **If your instructor also gave you a lab address**, add it:
+> ```bash
+> uv run roots join RMEETP --lab-url http://192.168.1.50:8090
+> ```
+> Usually you will not need to — the address is normally already built into the
+> repository you cloned.
+
+**✓ Done when** `config/team.yaml` and `.env` both exist, and the command printed
+`joined as team-NN` followed by an Airflow connection recipe.
+
+**If it fails**
+- `could not join` → the lab server is unreachable. Check the address with your
+  instructor; you may need `--lab-url`.
+- `401` or `token does not match` → the join code was mistyped. They are
+  case-insensitive but otherwise exact.
+
+---
+
+## Step 5 — Pre-flight check
+
+```bash
 uv run --env-file .env roots doctor
 ```
 
-The same commands work in PowerShell — they are program invocations, not shell
-syntax. **Windows users: run everything in PowerShell, not in WSL.**
+**Note the `--env-file .env`, and use it from now on.** Step 4 created that
+file; every command after this point needs the values in it, and that flag is
+what loads them. Forget it and things fail confusingly — Dagster loses its event
+log, the warehouse becomes unreachable. Just always include it.
 
-`roots join` writes `config/team.yaml` and `.env`. `roots doctor` is the
-pre-flight check — it tells you exactly what is missing and how to fix it. **Do
-not continue until it is green.**
+`roots doctor` checks versions, Docker, ports, both runtimes, the lab server and
+the warehouse, and tells you exactly what to fix.
 
-Then start both runtimes:
+**✓ Done when** there are no red `FAIL` lines. Yellow `....` lines are fine.
+
+**Do not go to Step 6 until this is green.** This is the entire reason for doing
+setup early.
+
+---
+
+## Step 6 — Start the runtimes
+
+Three things run at once, so you need **three terminal windows**, all in the
+repository directory. Leave all three running for the whole course.
+
+**Terminal 1 — Airflow**
 
 ```bash
-astro dev start                                        # Airflow -> http://localhost:8080
-uv run --env-file .env dg dev --target-path dagster    # Dagster -> http://localhost:3000
+astro dev start
 ```
 
-The first `astro dev start` pulls a Docker image and takes a few minutes. Every
-one after that is fast.
+The first run takes a few minutes; later ones are fast. **Read the URL it
+prints** — usually `http://localhost:8080`, but Astro picks a different port when
+8080 is busy. Log in with `admin` / `admin`.
 
-Finally, leave this running in a spare terminal for the whole session:
+**Terminal 2 — Dagster**
+
+```bash
+uv run --env-file .env dg dev --target-path dagster
+```
+
+Opens on <http://localhost:3000>. The asset graph will be empty. That is correct
+— building it is mission D1.
+
+**Terminal 3 — the progress daemon**
 
 ```bash
 uv run --env-file .env roots watch
 ```
 
-It re-checks your work every 20 seconds and updates the instructor's dashboard.
-You never have to think about it again.
+Re-checks your work every 20 seconds and updates the instructor's dashboard.
+Start it and forget it.
 
-### Installing the Astro CLI
-
-You need Docker Desktop running first, on either platform.
-
-**macOS**
-
-```bash
-brew install astronomer/tap/astro@1.42.1 --without-podman
-docker pull astrocrpublic.azurecr.io/runtime:3.3-2
-astro version
-```
-
-Not plain `brew install astro` — that formula is a different version and installs
-Podman instead of Docker.
-
-**Windows** — in **PowerShell**, not a WSL terminal:
-
-```powershell
-winget install -e --id Astronomer.Astro -v 1.42.1 --skip-dependencies
-docker pull astrocrpublic.azurecr.io/runtime:3.3-2
-astro version
-```
-
-`--skip-dependencies` is the Windows equivalent of macOS's `--without-podman`:
-without it, winget installs Podman and this course assumes Docker throughout.
-
-See [`WINDOWS-SETUP.md`](WINDOWS-SETUP.md) for the full Windows
-walkthrough — WSL2 prerequisites, the Windows-on-ARM path, and the handful of
-places Windows differs.
-
-Either way, `roots doctor` tells you if you got it wrong.
+**✓ Done when** both UIs load in a browser and `roots watch` is printing.
 
 ---
 
-## Where things are
+## On the day
+
+```bash
+uv run --env-file .env roots airflow-conn    # the values mission A1 needs
+```
+
+Then open [`missions/A1.md`](missions/A1.md) and start.
+
+---
+
+# Where things are
 
 ```
 missions/            START HERE. A1 -> A5, then D1 -> D4.
@@ -97,14 +227,14 @@ dagster/src/rootsmarkt/defs/
 packages/rootsmarkt-processing/
                      SEALED. All the data processing, written and tested.
                      Read it freely; you should not need to change it.
-config/team.yaml     Your team's roster, warehouse credentials, revenue bounds.
+config/team.yaml     Your team's roster, credentials, revenue bounds.
 data/                Deliveries you have fetched, and cleaned output.
 hints/ checkpoints/  Read via `roots hint` and `roots checkpoint`.
 ```
 
 ---
 
-## The distinction the whole day is about
+# The distinction the whole day is about
 
 **Data processing** reads, transforms, validates, aggregates and writes data.
 It is already written for you, in `packages/rootsmarkt-processing/`.
@@ -125,7 +255,9 @@ differently in Airflow and Dagster because…"*.
 
 ---
 
-## Commands
+# Commands
+
+All of these take the `uv run --env-file .env` prefix.
 
 ```bash
 roots verify a2          # check one mission now, and report it
@@ -138,15 +270,13 @@ roots doctor             # when something is wrong and you do not know what
 roots online --lab-url … # if the lab moves. Your instructor gives you the address.
 ```
 
-Prefix them with `uv run --env-file .env` if `roots` is not on your PATH.
-
 **Use `hint` and `checkpoint` freely.** There is no penalty and nobody to ask.
 Losing forty minutes to one mission costs you the rest of the course, which is a
 much worse outcome than taking a hint.
 
 ---
 
-## Your data is yours
+# Your data is yours
 
 Row counts, delivery IDs, store rosters and the plausible revenue range all
 differ per team, derived from your team ID.
@@ -157,14 +287,21 @@ policing it, but because it is literally about different data.
 
 ---
 
-## If something breaks
+# If something breaks
 
-`roots doctor` first. It checks versions, ports, Docker, both UIs, the warehouse
-and the lab server, and names the fix.
+`roots doctor` first, always. It names the fix.
 
-If the lab server becomes unreachable, your work is not lost: milestones are
+| Symptom | Cause |
+|---|---|
+| Dagster materializations vanish between runs | You dropped `--env-file .env`, so `DAGSTER_HOME` was not set |
+| `password authentication failed for user "team_NN"` | Your credentials are fine — something else is on that port. `roots doctor` explains |
+| Airflow UI not on 8080 | Astro picked another port. Read what `astro dev start` printed |
+| A DAG stopped appearing | It failed to parse. `astro dev pytest` gives a readable error |
+| Mission A1 cannot reach SupplyHub | `roots doctor` checks that address separately — it is not the same one as the dashboard |
+
+**If the lab server becomes unreachable**, your work is not lost: milestones are
 recorded locally in `.roots/` and sent when it comes back. If your instructor
-moves the lab to their own machine, they will give you an address:
+moves the lab to another machine, they will give you an address:
 
 ```bash
 uv run roots online --lab-url http://<address>:8090

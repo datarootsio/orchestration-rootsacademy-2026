@@ -13,8 +13,28 @@ class LabUnreachable(RuntimeError):
     pass
 
 
+# Written by `lab host` before the student repo is built, so the repository a
+# team clones already knows where the lab is and `roots join <code>` needs
+# nothing else. One fewer thing to read off a projector and mistype.
+BAKED_LAB_URL = Path("config/lab-url")
+
+DEFAULT_LAB_URL = "http://localhost:8090"
+
+
 def lab_url(override: str | None = None) -> str:
-    """--lab-url > ROOTS_LAB_URL > LAB_URL in .env > localhost."""
+    """Where the lab server is, in order of precedence:
+
+        --lab-url  >  ROOTS_LAB_URL  >  LAB_URL env  >  .env  >  config/lab-url  >  localhost
+
+    `.env` deliberately beats `config/lab-url`. `config/lab-url` is what the repo
+    shipped with; `.env` is where the team currently is. A team told to run
+    `roots online --lab-url ...` mid-course must stay pointed at the new address,
+    not snap back to the baked-in one on the next command.
+
+    The localhost fallback is last and is only ever right for whoever hosts the
+    lab. Before this file existed it was the default for everyone, so every
+    participant needed `--lab-url` on a command the README did not show it on.
+    """
     if override:
         return override.rstrip("/")
     for key in ("ROOTS_LAB_URL", "LAB_URL"):
@@ -25,7 +45,25 @@ def lab_url(override: str | None = None) -> str:
         for line in env.read_text(encoding="utf-8").splitlines():
             if line.startswith("LAB_URL="):
                 return line.split("=", 1)[1].strip().rstrip("/")
-    return "http://localhost:8090"
+    baked = _baked_lab_url()
+    if baked:
+        return baked
+    return DEFAULT_LAB_URL
+
+
+def _baked_lab_url() -> str | None:
+    """The address the repo was built with, if any. Never fatal."""
+    for candidate in (BAKED_LAB_URL, *(p / BAKED_LAB_URL for p in Path.cwd().parents)):
+        try:
+            if not candidate.is_file():
+                continue
+            for line in candidate.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    return stripped.rstrip("/")
+        except OSError:
+            continue
+    return None
 
 
 def _call(method: str, url: str, token: str = "", body: dict | None = None, timeout: float = 10.0):

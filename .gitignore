@@ -2,7 +2,12 @@
 # `roots join` writes these per team. They carry the SupplyHub token and the
 # team's Postgres password. Never commit them.
 .env
+.env.bak
 config/team.yaml
+
+# NOT ignored: config/lab-url. That is the lab's address, written by `lab host`
+# and deliberately shipped so participants run `roots join <code>` with nothing
+# else to copy. It holds no secret.
 
 # `lab export-configs` writes one team.yaml per team, each with credentials.
 # The CLI default is ./team-configs relative to wherever it is run, so this is

@@ -407,3 +407,79 @@ def test_doctor_prints_the_windows_hint_on_windows(workdir, happy_externals, mon
     result = runner.invoke(main.app, ["doctor"])
     assert "winget install" in result.output
     assert "brew install" not in result.output
+
+
+# ------------------------------------------------- SupplyHub vs the lab address
+
+
+def test_a_remote_lab_handing_out_localhost_is_a_failure(workdir, happy_externals):
+    """The trap `lab host` exists to prevent, caught in pre-flight.
+
+    `roots join` succeeds against a remote lab, and the config it hands back says
+    `localhost` because the instructor never ran `lab host`. On the participant's
+    laptop that means their own machine. Mission A1 is otherwise the first thing
+    to notice, twenty minutes later.
+    """
+    happy_externals.setenv("ROOTS_LAB_URL", "http://192.168.0.155:8090")
+    happy_externals.setenv("SUPPLYHUB_BASE_URL", "http://localhost:8090")
+    (workdir / ".env").write_text(
+        "ROOTSMARKT_DSN=postgresql://x:y@localhost:5432/z\n", encoding="utf-8"
+    )
+    result = runner.invoke(main.app, ["doctor"])
+    assert result.exit_code == 1
+    assert "handed a local address by a remote lab" in result.output
+    assert "lab host" in result.output
+
+
+def test_a_local_lab_with_a_local_supplyhub_is_fine(workdir, happy_externals):
+    """The instructor's own machine, where both being localhost is correct."""
+    happy_externals.setenv("ROOTS_LAB_URL", "http://localhost:8090")
+    happy_externals.setenv("SUPPLYHUB_BASE_URL", "http://localhost:8090")
+    (workdir / ".env").write_text(
+        "ROOTSMARKT_DSN=postgresql://x:y@localhost:5432/z\n", encoding="utf-8"
+    )
+    result = runner.invoke(main.app, ["doctor"])
+    assert "handed a local address" not in result.output
+
+
+def test_a_matching_remote_supplyhub_is_probed_not_assumed(workdir, happy_externals):
+    happy_externals.setenv("ROOTS_LAB_URL", "http://192.168.0.155:8090")
+    happy_externals.setenv("SUPPLYHUB_BASE_URL", "http://192.168.0.155:8090")
+    (workdir / ".env").write_text(
+        "ROOTSMARKT_DSN=postgresql://x:y@localhost:5432/z\n", encoding="utf-8"
+    )
+    result = runner.invoke(main.app, ["doctor"])
+    assert "SupplyHub at http://192.168.0.155:8090 reachable" in result.output
+
+
+def test_an_unreachable_supplyhub_fails_even_when_the_lab_answers(workdir, happy_externals):
+    """They are different addresses and fail independently. Checking only
+    LAB_URL passed while the address A1 actually uses was dead."""
+    happy_externals.setattr(
+        api, "healthy", lambda base: "8090" in base and "unreachable" not in base
+    )
+    happy_externals.setenv("ROOTS_LAB_URL", "http://192.168.0.155:8090")
+    happy_externals.setenv("SUPPLYHUB_BASE_URL", "http://unreachable.invalid:9999")
+    (workdir / ".env").write_text(
+        "ROOTSMARKT_DSN=postgresql://x:y@localhost:5432/z\n", encoding="utf-8"
+    )
+    result = runner.invoke(main.app, ["doctor"])
+    assert result.exit_code == 1
+    assert "A1 cannot fetch a delivery" in result.output
+
+
+@pytest.mark.parametrize(
+    "url,loopback",
+    [
+        ("http://localhost:8090", True),
+        ("http://127.0.0.1:8090", True),
+        ("http://127.0.1.1:8090", True),
+        ("http://0.0.0.0:8090", True),
+        ("http://192.168.0.155:8090", False),
+        ("http://macbook.local:8090", False),
+        ("localhost", True),
+        ("192.168.0.155", False),
+    ],
+)
+def test_loopback_detection(url, loopback):
+    assert main._is_loopback(url) is loopback
