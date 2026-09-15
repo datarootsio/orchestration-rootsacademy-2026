@@ -248,6 +248,7 @@ Then open [`missions/A1.md`](missions/A1.md) and start.
 # Where things are
 
 ```
+CONCEPTS.md          Mental models for Airflow and Dagster. Keep it open.
 missions/            START HERE. A1 -> A5, then D1 -> D4.
 dags/                Your Airflow pipeline. You edit this.
 dagster/src/rootsmarkt/defs/

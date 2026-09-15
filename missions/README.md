@@ -14,6 +14,10 @@ Work through these in order. Each one is 15–20 minutes.
 | **D3** | [Selective recovery](D3.md) | A rule changed. What does that actually invalidate? |
 | **D4** | [The comparison](D4.md) | What you would do differently in each tool, and why |
 
+Stuck on what a word means rather than what to type? [`../CONCEPTS.md`](../CONCEPTS.md) has the
+mental models — DAG run vs task instance, what a materialization actually records, what `blocking`
+changes. No syntax; that is in the file you are editing.
+
 ## The two commands you will use constantly
 
 ```
