@@ -364,10 +364,21 @@ def test_missing_env_warns_rather_than_failing_twice(workdir, happy_externals):
 # --------------------------------------------------------- platform-aware hints
 
 
-def test_windows_gets_the_winget_command():
+def test_windows_leads_with_the_no_package_manager_path():
+    """winget cannot be assumed -- Microsoft ships it inside App Installer, which
+    arrives via the Store and may be absent on a managed laptop. Leading with it
+    means the first thing some participants read does not apply to them."""
     hint = main.astro_install_hint("win32")
-    assert "winget install -e --id Astronomer.Astro -v 1.42.1 --skip-dependencies" in hint
+    assert "setup-windows.ps1" in hint
     assert "brew" not in hint
+
+    # Ordering is the assertion: script and manual download BEFORE winget.
+    assert hint.index("setup-windows.ps1") < hint.index("winget")
+    assert hint.index("releases/tag/v1.42.1") < hint.index("winget")
+
+    # winget is still offered, as a shortcut.
+    assert "winget install -e --id Astronomer.Astro -v 1.42.1 --skip-dependencies" in hint
+
     # The two facts a Windows participant cannot guess.
     assert "PowerShell, NOT in a WSL terminal" in hint
     assert "arm64" in hint
@@ -483,3 +494,61 @@ def test_an_unreachable_supplyhub_fails_even_when_the_lab_answers(workdir, happy
 )
 def test_loopback_detection(url, loopback):
     assert main._is_loopback(url) is loopback
+
+
+
+# --------------------------------------------- does --env-file actually work?
+
+
+def test_a_broken_env_file_is_caught_end_to_end(workdir, happy_externals):
+    """Generalises the backslash check: this asks uv to load the file and report
+    back, so it catches any parse failure rather than the one known cause."""
+    (workdir / ".env").write_text(
+        "TEAM_ID=team-00\nROOTSMARKT_DSN=postgresql://x:y@localhost:5432/z\n",
+        encoding="utf-8",
+    )
+
+    def uv_drops_everything(cmd, timeout=25):
+        if cmd and cmd[0] == "uv":
+            return subprocess.CompletedProcess(
+                cmd, 0, "TEAM_ID=MISSING\n", "warning: Failed to parse environment file `.env`\n"
+            )
+        return subprocess.CompletedProcess(cmd, 0, "29.7.2\n", "")
+
+    happy_externals.setattr(main, "_run", uv_drops_everything)
+    result = runner.invoke(main.app, ["doctor"])
+    assert result.exit_code == 1
+    assert "does NOT load your configuration" in result.output
+    assert "Dagster especially" in result.output
+
+
+def test_a_working_env_file_passes(workdir, happy_externals):
+    (workdir / ".env").write_text(
+        "TEAM_ID=team-00\nROOTSMARKT_DSN=postgresql://x:y@localhost:5432/z\n",
+        encoding="utf-8",
+    )
+
+    def uv_works(cmd, timeout=25):
+        if cmd and cmd[0] == "uv":
+            return subprocess.CompletedProcess(cmd, 0, "TEAM_ID=team-00\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "29.7.2\n", "")
+
+    happy_externals.setattr(main, "_run", uv_works)
+    result = runner.invoke(main.app, ["doctor"])
+    assert "loads your configuration" in result.output
+
+
+def test_a_missing_uv_warns_rather_than_failing(workdir, happy_externals):
+    """A probe that cannot run is not evidence of breakage. Failing here would
+    cry wolf on any machine where uv is invoked some other way."""
+    (workdir / ".env").write_text("TEAM_ID=team-00\n", encoding="utf-8")
+
+    def no_uv(cmd, timeout=25):
+        if cmd and cmd[0] == "uv":
+            return None
+        return subprocess.CompletedProcess(cmd, 0, "29.7.2\n", "")
+
+    happy_externals.setattr(main, "_run", no_uv)
+    result = runner.invoke(main.app, ["doctor"])
+    assert "could not test" in result.output
+    assert "does NOT load" not in result.output

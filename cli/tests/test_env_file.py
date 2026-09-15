@@ -19,6 +19,7 @@ than asserting something about our own strings.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -27,6 +28,22 @@ from pathlib import PureWindowsPath
 import pytest
 
 from roots import main
+
+# Keys these tests ask uv to supply. They MUST be absent from the subprocess's
+# starting environment, or the tests prove nothing: an inherited value passes
+# even when uv supplied none.
+#
+# They leak in because `main._load_env()` does `os.environ.setdefault(...)`, so
+# any earlier test that invokes `roots doctor` in this pytest process leaves
+# TEAM_ID behind. That is correct in production -- doctor is one short-lived
+# process and the checks need the values -- but it made these tests pass in
+# isolation and fail in a full run, which is the wrong way round for a test
+# whose whole job is to detect a silent failure.
+PROBED_KEYS = ("TEAM_ID", "SUPPLYHUB_TOKEN", "ROOTSMARKT_DSN", "DAGSTER_HOME")
+
+
+def _clean_env() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k not in PROBED_KEYS}
 
 CFG = {
     "team_id": "team-04",
@@ -120,7 +137,7 @@ def test_uv_parses_a_generated_env_file_with_windows_paths(tmp_path):
     )
     out = subprocess.run(
         ["uv", "run", "--no-project", "--env-file", str(env_file), sys.executable, "-c", script],
-        capture_output=True, text=True, cwd=tmp_path, timeout=120,
+        capture_output=True, text=True, cwd=tmp_path, timeout=120, env=_clean_env(),
     )
     assert "Failed to parse environment file" not in out.stderr, out.stderr
 
@@ -149,7 +166,7 @@ def test_negative_control_uv_really_does_discard_a_backslash_file(tmp_path):
     out = subprocess.run(
         ["uv", "run", "--no-project", "--env-file", str(env_file), sys.executable,
          "-c", "import os;print(os.environ.get('TEAM_ID'))"],
-        capture_output=True, text=True, cwd=tmp_path, timeout=120,
+        capture_output=True, text=True, cwd=tmp_path, timeout=120, env=_clean_env(),
     )
     assert "Failed to parse environment file" in out.stderr
     # TEAM_ID has no backslash and is on its own line, and is still lost.

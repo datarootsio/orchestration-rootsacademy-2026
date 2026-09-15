@@ -42,19 +42,45 @@ brew install uv
 brew install astronomer/tap/astro@1.42.1 --without-podman
 ```
 
-**Windows** (PowerShell)
-
-```powershell
-winget install -e --id Docker.DockerDesktop
-winget install -e --id astral-sh.uv
-winget install -e --id Astronomer.Astro -v 1.42.1 --skip-dependencies
-```
-
-Then, on either platform, pull the Airflow image now rather than on the day:
+Then pull the Airflow image now rather than on the day:
 
 ```bash
 docker pull astrocrpublic.azurecr.io/runtime:3.3-2
 ```
+
+**Windows** (PowerShell) — **no `winget` and no admin rights needed**, except for
+one step:
+
+1. **Enable WSL 2.** This is the only part needing administrator rights, and it
+   is one-time per machine. In an admin PowerShell, then reboot:
+   ```powershell
+   wsl --update
+   wsl --install --no-distribution
+   ```
+   If you cannot elevate, ask IT **now** — nothing else needs admin, but nothing
+   works without this.
+
+2. **Install Docker Desktop**, per-user, no admin:
+   [download it](https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe),
+   then either double-click it or run
+   `& "$HOME\Downloads\Docker Desktop Installer.exe" install --user`.
+   Open it and leave it running.
+
+3. **Do Step 2 below (clone the repo) now**, then come back here and run, from
+   inside it:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\setup-windows.ps1
+   ```
+   It installs uv, downloads the pinned Astro CLI, verifies its checksum against
+   Astronomer's published value, puts it on your PATH and pulls the Airflow
+   image. Then **open a new terminal** so the PATH change applies.
+
+   `-ExecutionPolicy Bypass` applies to that one run only. It is there because
+   managed laptops block scripts by default.
+
+If scripts are blocked outright — common on managed laptops — the same steps by
+hand are in [`WINDOWS-SETUP.md`](WINDOWS-SETUP.md), along with the `winget`
+shortcut if you happen to have it.
 
 **✓ Done when** all three report a version:
 
@@ -65,11 +91,14 @@ astro version                                 # 1.42.1
 ```
 
 **If it fails**
-- `astro version` says something other than 1.42.1 → you installed the wrong
-  formula. On macOS it must be `astronomer/tap/astro@1.42.1`, not plain
-  `brew install astro`. The `--without-podman` / `--skip-dependencies` flag
-  matters too: without it you get Podman, and this course assumes Docker.
+- `astro version` reports something other than 1.42.1 → on macOS you installed
+  the wrong formula. It must be `astronomer/tap/astro@1.42.1`, not plain
+  `brew install astro`, and `--without-podman` matters: without it you get
+  Podman, and this course assumes Docker.
+- `astro` not found on Windows → you did not open a **new** terminal after the
+  script added it to PATH.
 - `docker info` errors → Docker Desktop is installed but not *running*. Open it.
+- `wsl` errors on Windows → Step 1.1 has not been done, and it needs admin.
 
 ---
 

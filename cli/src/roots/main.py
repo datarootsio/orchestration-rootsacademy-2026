@@ -48,24 +48,31 @@ ASTRO_INSTALL_HINT_MACOS = (
     f"        https://github.com/astronomer/astro-cli/releases/tag/v{ASTRO_PINNED}"
 )
 
-# Windows. Verified 2026-09-15 against astronomer.io/docs/astro/cli/install-cli
-# and the winget-pkgs manifest at manifests/a/Astronomer/Astro/1.42.1/.
+# Windows. Verified 2026-09-15 against astronomer.io/docs/astro/cli/install-cli,
+# docs.docker.com and the winget-pkgs manifest at
+# manifests/a/Astronomer/Astro/1.42.1/.
 #
-# `--skip-dependencies` is the exact analogue of Homebrew's --without-podman:
-# since CLI 1.32.0 both package managers pull Podman in as the default engine,
-# and this course is Docker throughout (D-002, D-023).
+# The SCRIPT leads, and winget is demoted to a shortcut, because winget cannot be
+# assumed: Microsoft ships it inside App Installer, which arrives via the
+# Microsoft Store and may be absent or blocked on a managed laptop. A fallback
+# that quietly depends on the thing that is missing is not a fallback.
 #
-# The winget manifest for 1.42.1 declares x64 ONLY, so Windows-on-ARM has to use
-# the manual .exe -- which is a bare executable, not an archive, unlike every
-# macOS and Linux asset.
+# The script route also needs no administrator rights, which matters more in a
+# room of corporate laptops than the package manager does.
+#
+# `--skip-dependencies` on the winget line is the exact analogue of Homebrew's
+# --without-podman: since CLI 1.32.0 both package managers pull Podman in as the
+# default engine, and this course is Docker throughout (D-002, D-023).
 ASTRO_INSTALL_HINT_WINDOWS = (
+    "        powershell -ExecutionPolicy Bypass -File .\\setup-windows.ps1\n"
+    "      That installs uv and astro with no package manager and no admin.\n"
+    "      By hand instead -- download, rename to astro.exe, add to PATH:\n"
+    f"        https://github.com/astronomer/astro-cli/releases/tag/v{ASTRO_PINNED}\n"
+    f"        (astro_{ASTRO_PINNED}_windows_amd64.exe / _arm64.exe -- a bare .exe)\n"
+    "      Or, IF you have it:\n"
     f"        winget install -e --id Astronomer.Astro -v {ASTRO_PINNED} --skip-dependencies\n"
     f"        docker pull {ASTRO_RUNTIME_IMAGE}\n"
-    "      Run astro in PowerShell, NOT in a WSL terminal.\n"
-    "      On Windows-on-ARM, or if winget has no 1.42.1, download the .exe,\n"
-    "      rename it to astro.exe and put it on PATH:\n"
-    f"        https://github.com/astronomer/astro-cli/releases/tag/v{ASTRO_PINNED}\n"
-    f"        (astro_{ASTRO_PINNED}_windows_amd64.exe / _arm64.exe -- a bare .exe)"
+    "      Run astro in PowerShell, NOT in a WSL terminal."
 )
 
 ASTRO_INSTALL_HINT_LINUX = (
@@ -390,6 +397,7 @@ def doctor(report: bool = typer.Option(False, help="Terse output for the instruc
             )
         else:
             _ok(f"{ENV_PATH} parses (no backslashes in values)")
+            _env_file_actually_loads(fail)
 
         root = _repo_root()
         text = str(root)
@@ -1058,6 +1066,42 @@ if _solutions_dir().is_dir():
 
         typer.echo(f"\n  Stubs backed up to {backup_root.relative_to(root)}")
         typer.echo("  Undo with: roots solution all --restore")
+
+
+def _env_file_actually_loads(fail) -> None:
+    """Run the exact mechanism `dg dev` depends on, and see if it works.
+
+    The backslash check above catches the cause we know about (D-051). This
+    catches the SYMPTOM whatever the cause -- a quoting rule we have not met, a
+    uv change, a half-written file -- by asking uv to load the file and report
+    back one value.
+
+    Worth a second of pre-flight because the failure is silent and total: uv
+    discards the entire env file, prints one `warning:` line, and exits 0. What
+    a participant then sees is Dagster losing its event log and the warehouse
+    refusing connections, with nothing anywhere naming the env file.
+    """
+    if "TEAM_ID" not in ENV_PATH.read_text(encoding="utf-8"):
+        return                                   # nothing to look for yet
+    probe = "import os;print('TEAM_ID=' + (os.environ.get('TEAM_ID') or 'MISSING'))"
+    out = _run(
+        ["uv", "run", "--no-project", "--env-file", str(ENV_PATH), sys.executable, "-c", probe],
+        timeout=60,
+    )
+    if out is None:
+        _warn("could not test `uv run --env-file` (uv not found?) -- skipped")
+        return
+    if "TEAM_ID=MISSING" in out.stdout or "Failed to parse environment file" in out.stderr:
+        fail(
+            "`uv run --env-file .env` does NOT load your configuration. Everything "
+            "run that way -- Dagster especially -- would start with nothing set. "
+            "Re-run `roots join <code>`; if it persists, show your instructor "
+            f"this: {out.stderr.strip().splitlines()[-1] if out.stderr.strip() else 'no stderr'}"
+        )
+    elif "TEAM_ID=" in out.stdout:
+        _ok("`uv run --env-file .env` loads your configuration")
+    else:
+        _warn("could not confirm `uv run --env-file` behaviour -- check manually")
 
 
 def _is_loopback(url_or_host: str) -> bool:
