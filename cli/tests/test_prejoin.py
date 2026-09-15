@@ -131,3 +131,45 @@ def test_a_missing_checkpoint_says_so(unjoined):
     assert result.returncode == 1
     assert "NameError" not in result.stderr
     assert "no checkpoint" in result.stdout + result.stderr
+
+
+# ------------------------------------------------------- offline is instructor-only
+
+
+def test_offline_is_absent_without_a_lab_directory(unjoined):
+    """`roots offline` starts the lab from `lab/docker-compose.yml`, and `lab/`
+    does not ship to participants (D-047). It could never have worked there -- it
+    would have failed with "not found" at the exact moment a team needed it. It
+    is now registered only where the lab actually exists (D-052)."""
+    result = subprocess.run(
+        [sys.executable, "-c", "from roots.main import main; main()", "--help"],
+        cwd=unjoined, capture_output=True, text=True,
+    )
+    assert "offline" not in result.stdout
+    # The participant-facing fallback must still be there.
+    assert "online" in result.stdout
+
+
+def test_offline_appears_when_the_lab_is_present(unjoined):
+    lab = unjoined / "lab"
+    lab.mkdir()
+    (lab / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, "-c", "from roots.main import main; main()", "--help"],
+        cwd=unjoined, capture_output=True, text=True,
+    )
+    assert "offline" in result.stdout
+
+
+def test_online_works_before_joining(unjoined):
+    """The fallback has to work when the lab was unreachable at join time --
+    which is exactly the situation it exists for."""
+    result = subprocess.run(
+        [sys.executable, "-c", "from roots.main import main; main()",
+         "online", "--lab-url", "http://192.168.1.50:8090"],
+        cwd=unjoined, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    env = (unjoined / ".env").read_text(encoding="utf-8")
+    assert "LAB_URL=http://192.168.1.50:8090" in env
+    assert "SUPPLYHUB_BASE_URL=http://192.168.1.50:8090" in env

@@ -23,7 +23,7 @@ def _read(path: Path, default):
     if not path.exists():
         return default
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return default
 
@@ -38,7 +38,7 @@ def progress() -> dict:
 
 def _write(data: dict) -> None:
     STATE_DIR.mkdir(exist_ok=True)
-    PROGRESS.write_text(json.dumps(data, indent=2))
+    PROGRESS.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def hints_shown(mission: str) -> int:
@@ -93,7 +93,7 @@ def mark_reported(name: str) -> None:
     data = progress()
     if name not in data["reported"]:
         data["reported"].append(name)
-    PROGRESS.write_text(json.dumps(data, indent=2))
+    PROGRESS.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def record(name: str, detail: str = "") -> bool:
@@ -104,7 +104,7 @@ def record(name: str, detail: str = "") -> bool:
     if new:
         data["earned"][name] = {"at": time.time(), "detail": detail}
     data["last_run"] = time.time()
-    PROGRESS.write_text(json.dumps(data, indent=2))
+    PROGRESS.write_text(json.dumps(data, indent=2), encoding="utf-8")
     return new
 
 
@@ -122,6 +122,6 @@ def enqueue(name: str, payload: dict) -> None:
 def drain_queue() -> list[dict]:
     if not QUEUE.exists():
         return []
-    items = [json.loads(line) for line in QUEUE.read_text().splitlines() if line.strip()]
+    items = [json.loads(line) for line in QUEUE.read_text(encoding="utf-8").splitlines() if line.strip()]
     QUEUE.unlink()
     return items

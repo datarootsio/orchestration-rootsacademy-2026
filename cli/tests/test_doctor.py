@@ -33,6 +33,14 @@ def workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "team.yaml").write_text(yaml.safe_dump(VALID_CONFIG))
+    # A realistic .env, so the environment section is actually exercised rather
+    # than short-circuiting on a missing file in every test.
+    (tmp_path / ".env").write_text(
+        "LAB_URL=http://127.0.0.1:9\n"
+        "ROOTSMARKT_DSN=postgresql://x:y@localhost:5432/z\n"
+        "DAGSTER_HOME=" + (tmp_path / ".dagster").as_posix() + "\n",
+        encoding="utf-8",
+    )
     monkeypatch.setenv("ROOTSMARKT_DSN", "postgresql://x:y@localhost:5432/z")
     monkeypatch.setenv("ROOTS_LAB_URL", "http://127.0.0.1:9")
     # team_config is lru_cached, and each test writes a different file.
@@ -154,7 +162,10 @@ def test_completes_when_the_lab_server_is_down(workdir, happy_externals):
     result = runner.invoke(main.app, ["doctor"])
     assert result.exit_code == 0
     assert "unreachable" in result.output
-    assert "roots offline" in result.output
+    # Must name a command participants actually HAVE. `roots offline` is
+    # instructor-only now (D-052), so pointing them at it would be a dead end.
+    assert "roots online --lab-url" in result.output
+    assert "roots offline" not in result.output
 
 
 def test_missing_config_is_a_failure(workdir, happy_externals):
@@ -169,6 +180,10 @@ def test_missing_config_is_a_failure(workdir, happy_externals):
 
 def test_missing_dsn_is_a_failure(workdir, happy_externals):
     happy_externals.delenv("ROOTSMARKT_DSN", raising=False)
+    # `.env` must not put it back: `_load_env` loads that file before the checks
+    # run, so clearing only the process environment leaves the DSN present and
+    # the test asserting nothing.
+    (workdir / ".env").write_text("LAB_URL=http://127.0.0.1:9\n", encoding="utf-8")
     result = runner.invoke(main.app, ["doctor"])
     assert result.exit_code == 1
     assert "ROOTSMARKT_DSN not set" in result.output
@@ -294,3 +309,101 @@ def test_other_failures_get_no_spurious_advice():
         "postgresql://team_01:pw@localhost:5432/rootsmarkt",
         RuntimeError("connection refused"),
     ) == []
+
+
+# ------------------------------------------------------------ Windows readiness
+
+
+def test_backslashes_in_env_are_a_loud_failure(workdir, happy_externals):
+    """The Windows bug, caught in pre-flight instead of at minute 20.
+
+    uv discards the whole env file on one backslash, so Dagster starts with no
+    configuration and the symptom appears four layers away. Doctor is the only
+    place this is cheap to spot.
+    """
+    (workdir / ".env").write_text(
+        "ROOTSMARKT_DSN=postgresql://x:y@localhost:5432/z\n"
+        "DAGSTER_HOME=C:\\Users\\bao\\repo\\.dagster\n"
+        "ROOTSMARKT_CONFIG=C:\\Users\\bao\\repo\\config\\team.yaml\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(main.app, ["doctor"])
+    assert result.exit_code == 1
+    assert "backslashes in" in result.output
+    assert "DAGSTER_HOME" in result.output and "ROOTSMARKT_CONFIG" in result.output
+    assert "discards the ENTIRE env file" in result.output
+
+
+def test_a_comment_containing_a_backslash_is_not_flagged(workdir, happy_externals):
+    (workdir / ".env").write_text(
+        "# on Windows this used to be C:\\Users\\...\n"
+        "ROOTSMARKT_DSN=postgresql://x:y@localhost:5432/z\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(main.app, ["doctor"])
+    # Assert on the FAILURE wording: the PASS line also says "no backslashes in
+    # values", so a bare substring check passes for the wrong reason.
+    assert "has backslashes in" not in result.output
+    assert "parses (no backslashes in values)" in result.output
+
+
+def test_clean_env_passes(workdir, happy_externals):
+    result = runner.invoke(main.app, ["doctor"])
+    assert "parses (no backslashes in values)" in result.output
+
+
+def test_missing_env_warns_rather_than_failing_twice(workdir, happy_externals):
+    """`config` already reports the one actionable cause. A second failure for
+    the same cause makes the failure count meaningless."""
+    (workdir / ".env").unlink()
+    result = runner.invoke(main.app, ["doctor"])
+    assert ".env missing" in result.output
+    assert "FAIL  .env missing" not in result.output
+
+
+# --------------------------------------------------------- platform-aware hints
+
+
+def test_windows_gets_the_winget_command():
+    hint = main.astro_install_hint("win32")
+    assert "winget install -e --id Astronomer.Astro -v 1.42.1 --skip-dependencies" in hint
+    assert "brew" not in hint
+    # The two facts a Windows participant cannot guess.
+    assert "PowerShell, NOT in a WSL terminal" in hint
+    assert "arm64" in hint
+
+
+def test_macos_still_gets_the_tap_formula():
+    hint = main.astro_install_hint("darwin")
+    assert "brew install astronomer/tap/astro@1.42.1 --without-podman" in hint
+    assert "winget" not in hint
+
+
+def test_linux_gets_neither():
+    hint = main.astro_install_hint("linux")
+    assert "brew" not in hint and "winget" not in hint
+
+
+def test_the_hint_follows_the_running_platform(monkeypatch):
+    monkeypatch.setattr(main.sys, "platform", "win32")
+    assert "winget" in main.astro_install_hint()
+    monkeypatch.setattr(main.sys, "platform", "darwin")
+    assert "brew" in main.astro_install_hint()
+
+
+def test_doctor_prints_the_windows_hint_on_windows(workdir, happy_externals, monkeypatch):
+    """End to end: a Windows participant whose astro is missing must not be
+    handed a Homebrew command."""
+    monkeypatch.setattr(main.sys, "platform", "win32")
+    (workdir / "Dockerfile").touch()
+    (workdir / "dags").mkdir(exist_ok=True)
+
+    def no_astro(cmd, timeout=25):
+        if cmd[0] == "astro":
+            return None
+        return subprocess.CompletedProcess(cmd, 0, "29.7.2\n", "")
+
+    monkeypatch.setattr(main, "_run", no_astro)
+    result = runner.invoke(main.app, ["doctor"])
+    assert "winget install" in result.output
+    assert "brew install" not in result.output

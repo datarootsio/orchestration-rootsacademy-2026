@@ -17,6 +17,7 @@ was written from assumption and got three things wrong:
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 
 DAG_ID = "rootsmarkt_delivery"
@@ -55,6 +56,19 @@ def _astro(*args: str) -> str:
     return out.stdout
 
 
+# ANSI colour/cursor sequences. The Astro CLI is documented to leak these into
+# Windows terminal output (astronomer/astro-cli#635, open since 2022), which
+# would leave a line reading `\x1b[0m[{"dag_id": ...` -- not starting with `[`,
+# so the scan below would skip the only line that mattered and every probe would
+# report "no JSON in Airflow output". Stripping costs nothing on macOS and Linux,
+# where the sequences simply are not there.
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI.sub("", text)
+
+
 def _json(text: str):
     """Pull the JSON payload out of Airflow CLI output.
 
@@ -62,7 +76,7 @@ def _json(text: str):
     `[warning  ] ...`, so scanning for the first `[` grabs a log bracket and the
     parse fails on output that is perfectly fine.
     """
-    for line in reversed(text.splitlines()):
+    for line in reversed(_strip_ansi(text).splitlines()):
         stripped = line.strip()
         if stripped.startswith(("[", "{")):
             try:

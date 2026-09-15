@@ -22,9 +22,12 @@ go wrong, it should go wrong while there is time to fix it.
 
 ```bash
 uv sync
-roots join <your-team-code>
-roots doctor
+uv run roots join <your-team-code>
+uv run --env-file .env roots doctor
 ```
+
+The same commands work in PowerShell — they are program invocations, not shell
+syntax. **Windows users: run everything in PowerShell, not in WSL.**
 
 `roots join` writes `config/team.yaml` and `.env`. `roots doctor` is the
 pre-flight check — it tells you exactly what is missing and how to fix it. **Do
@@ -51,13 +54,35 @@ You never have to think about it again.
 
 ### Installing the Astro CLI
 
+You need Docker Desktop running first, on either platform.
+
+**macOS**
+
 ```bash
 brew install astronomer/tap/astro@1.42.1 --without-podman
 docker pull astrocrpublic.azurecr.io/runtime:3.3-2
+astro version
 ```
 
 Not plain `brew install astro` — that formula is a different version and installs
-Podman instead of Docker. `roots doctor` will tell you if you got it wrong.
+Podman instead of Docker.
+
+**Windows** — in **PowerShell**, not a WSL terminal:
+
+```powershell
+winget install -e --id Astronomer.Astro -v 1.42.1 --skip-dependencies
+docker pull astrocrpublic.azurecr.io/runtime:3.3-2
+astro version
+```
+
+`--skip-dependencies` is the Windows equivalent of macOS's `--without-podman`:
+without it, winget installs Podman and this course assumes Docker throughout.
+
+See [`WINDOWS-SETUP.md`](WINDOWS-SETUP.md) for the full Windows
+walkthrough — WSL2 prerequisites, the Windows-on-ARM path, and the handful of
+places Windows differs.
+
+Either way, `roots doctor` tells you if you got it wrong.
 
 ---
 
@@ -110,7 +135,7 @@ roots checkpoint a2      # take a known-good state and keep moving
 roots submit a2 ...      # evidence submissions (A2, D3, D4)
 roots airflow-conn       # the exact Airflow connection values for A1
 roots doctor             # when something is wrong and you do not know what
-roots offline            # if the venue network dies. Everything keeps working.
+roots online --lab-url … # if the lab moves. Your instructor gives you the address.
 ```
 
 Prefix them with `uv run --env-file .env` if `roots` is not on your PATH.
@@ -137,6 +162,14 @@ policing it, but because it is literally about different data.
 `roots doctor` first. It checks versions, ports, Docker, both UIs, the warehouse
 and the lab server, and names the fix.
 
-If the room's network dies, `roots offline` moves the whole course onto your
-laptop — a local SupplyHub and a local Postgres, serving byte-identical data.
-Everything you have already fetched and loaded stays valid.
+If the lab server becomes unreachable, your work is not lost: milestones are
+recorded locally in `.roots/` and sent when it comes back. If your instructor
+moves the lab to their own machine, they will give you an address:
+
+```bash
+uv run roots online --lab-url http://<address>:8090
+uv run --env-file .env roots doctor
+```
+
+Everything you have already fetched and loaded stays valid — the delivery data is
+identical whichever machine serves it.

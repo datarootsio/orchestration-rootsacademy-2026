@@ -1,0 +1,42 @@
+# Line endings, normalised so a Windows checkout cannot change file contents.
+#
+# Git for Windows defaults to core.autocrlf=true, which rewrites text files to
+# CRLF on checkout. For this repo that is mostly harmless -- Python, YAML and
+# Markdown all cope -- so this file is INSURANCE, not a fix for an observed
+# failure. Saying so matters: the next person should not go hunting for the bug
+# it prevented.
+#
+# Where it would stop being harmless:
+#
+#   - Anything under include/ that becomes a shell script. Astro bind-mounts
+#     include/ into the Airflow container, so a CRLF script fails in Linux with
+#     `bad interpreter: /bin/bash^M` -- an error that names the wrong problem.
+#   - Checksums. The lab asserts byte-identical delivery data (D-022), and a
+#     checkout that rewrites bytes would break that comparison for one platform
+#     only, which is the worst kind of failure to reproduce.
+#
+# Astronomer documents no line-ending caveat for `astro dev start` (checked
+# 2026-09-15: zero hits for CRLF or "line endings" in astro-cli). The Runtime
+# image's own entrypoint ships inside the image and never touches the host
+# checkout, so only files WE mount are exposed.
+
+* text=auto eol=lf
+
+# Explicitly LF, because these cross into a Linux container.
+*.py      text eol=lf
+*.sh      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.md      text eol=lf
+*.csv     text eol=lf
+*.txt     text eol=lf
+Dockerfile text eol=lf
+.env.example text eol=lf
+
+# Never touched.
+*.exe     binary
+*.png     binary
+*.jpg     binary
+*.gz      binary
+*.zip     binary
+*.sqlite3 binary

@@ -151,3 +151,31 @@ def test_asset_not_registered(wire):
     )
     ok, detail = ap.asset_event_was_published()
     assert not ok and "not registered" in detail
+
+
+# ------------------------------------------------------- Windows: ANSI escapes
+
+
+def test_json_survives_ansi_escapes_in_the_output():
+    """The Astro CLI leaks ANSI sequences into Windows terminals -- open bug
+    astronomer/astro-cli#635. A leaked `\x1b[0m` before the payload means the
+    line no longer starts with `[`, so the scanner would skip the only line that
+    mattered and every Airflow probe would report "no JSON in Airflow output"."""
+    payload = '[{"dag_id": "rootsmarkt_delivery", "run_id": "manual__1", "state": "success"}]'
+    assert ap._json(f"\x1b[0m\x1b[1m{payload}\x1b[0m") == [
+        {"dag_id": "rootsmarkt_delivery", "run_id": "manual__1", "state": "success"}
+    ]
+
+
+def test_ansi_stripping_does_not_disturb_clean_output():
+    payload = '[{"dag_id": "d", "run_id": "r", "state": "success"}]'
+    assert ap._json(payload) == [{"dag_id": "d", "run_id": "r", "state": "success"}]
+
+
+def test_log_brackets_are_still_skipped_when_ansi_is_present():
+    """Both hazards at once: a coloured warning line above the real payload."""
+    text = (
+        "\x1b[33m[warning  ] something harmless\x1b[0m\n"
+        '\x1b[0m[{"dag_id": "d", "run_id": "r", "state": "failed"}]\n'
+    )
+    assert ap._json(text)[0]["state"] == "failed"

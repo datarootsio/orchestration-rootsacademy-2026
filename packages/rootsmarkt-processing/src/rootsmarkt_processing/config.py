@@ -83,7 +83,7 @@ def find_config() -> Path:
 @lru_cache(maxsize=1)
 def team_config(path: str | None = None) -> TeamConfig:
     p = Path(path) if path else find_config()
-    data = yaml.safe_load(p.read_text()) or {}
+    data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
 
     missing = [
         k for k in ("team_id", "supplyhub_token", "expected_stores", "plausible_daily_revenue_eur")

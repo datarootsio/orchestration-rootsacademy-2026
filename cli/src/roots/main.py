@@ -5,7 +5,7 @@
     roots verify [a1]     run checks now and report
     roots watch           the daemon that keeps the dashboard honest
     roots submit a2 ...   evidence submissions
-    roots offline         fall back to a fully local lab
+    roots online --lab-url <url>   point at a different lab server
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -34,22 +35,67 @@ ASTRO_PINNED = "1.42.1"
 ASTRO_PINNED_MINOR = "1.42."
 ASTRO_RUNTIME_IMAGE = "astrocrpublic.azurecr.io/runtime:3.3-2"
 
-# Verified 2026-08-15 against the tap formula index and astro@1.42.1.rb.
+# macOS. Verified 2026-08-15 against the tap formula index and astro@1.42.1.rb.
 # The versioned formula lives in astronomer/homebrew-tap, NOT homebrew-core:
 # core is on 1.45.0 and publishes no versioned formulae, so plain
 # `brew install astro` is wrong twice over -- off-pin AND it pulls Podman.
 # The tap formula declares podman as :recommended, which is what makes
 # --without-podman a valid option. See docs/version-verification.md.
-ASTRO_INSTALL_HINT = (
+ASTRO_INSTALL_HINT_MACOS = (
     f"        brew install astronomer/tap/astro@{ASTRO_PINNED} --without-podman\n"
     f"        docker pull {ASTRO_RUNTIME_IMAGE}\n"
     "      If Homebrew rejects the option, install the binary directly:\n"
     f"        https://github.com/astronomer/astro-cli/releases/tag/v{ASTRO_PINNED}"
 )
 
+# Windows. Verified 2026-09-15 against astronomer.io/docs/astro/cli/install-cli
+# and the winget-pkgs manifest at manifests/a/Astronomer/Astro/1.42.1/.
+#
+# `--skip-dependencies` is the exact analogue of Homebrew's --without-podman:
+# since CLI 1.32.0 both package managers pull Podman in as the default engine,
+# and this course is Docker throughout (D-002, D-023).
+#
+# The winget manifest for 1.42.1 declares x64 ONLY, so Windows-on-ARM has to use
+# the manual .exe -- which is a bare executable, not an archive, unlike every
+# macOS and Linux asset.
+ASTRO_INSTALL_HINT_WINDOWS = (
+    f"        winget install -e --id Astronomer.Astro -v {ASTRO_PINNED} --skip-dependencies\n"
+    f"        docker pull {ASTRO_RUNTIME_IMAGE}\n"
+    "      Run astro in PowerShell, NOT in a WSL terminal.\n"
+    "      On Windows-on-ARM, or if winget has no 1.42.1, download the .exe,\n"
+    "      rename it to astro.exe and put it on PATH:\n"
+    f"        https://github.com/astronomer/astro-cli/releases/tag/v{ASTRO_PINNED}\n"
+    f"        (astro_{ASTRO_PINNED}_windows_amd64.exe / _arm64.exe -- a bare .exe)"
+)
+
+ASTRO_INSTALL_HINT_LINUX = (
+    f"        curl -sSL install.astronomer.io | sudo bash -s -- v{ASTRO_PINNED}\n"
+    f"        docker pull {ASTRO_RUNTIME_IMAGE}"
+)
+
+
+def astro_install_hint(platform: str | None = None) -> str:
+    """The install command for the machine this is running on.
+
+    Printed by `roots doctor` when astro is missing or off-pin. A pre-flight tool
+    that prints a Homebrew command to a Windows participant has told them nothing
+    -- and they are the ones least able to work out the substitution.
+    """
+    platform = platform if platform is not None else sys.platform
+    if platform.startswith("win"):
+        return ASTRO_INSTALL_HINT_WINDOWS
+    if platform == "darwin":
+        return ASTRO_INSTALL_HINT_MACOS
+    return ASTRO_INSTALL_HINT_LINUX
+
 
 def _parse_astro_version(text: str) -> str | None:
-    """Pull a semver out of `astro version` output, whatever it wraps it in."""
+    """Pull a semver out of `astro version` output, whatever it wraps it in.
+
+    Tolerant of ANSI escapes, which the Astro CLI is documented to leak into
+    Windows terminals (astronomer/astro-cli#635). The digit-matching regex
+    survives them anyway; this is stated so the next person does not "fix" it.
+    """
     match = re.search(r"(\d+\.\d+\.\d+)", text)
     return match.group(1) if match else None
 
@@ -59,7 +105,7 @@ def _load_env() -> None:
     """Make .env visible to this process. Airflow and Dagster read it themselves."""
     if not ENV_PATH.exists():
         return
-    for line in ENV_PATH.read_text().splitlines():
+    for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             key, value = line.split("=", 1)
@@ -112,6 +158,65 @@ def _warn(msg: str) -> None:
 # ---------------------------------------------------------------------- join
 
 
+def _env_path_value(path) -> str:
+    """A filesystem path as it must appear in `.env`: forward slashes, always.
+
+    THIS IS LOAD-BEARING ON WINDOWS. uv's `--env-file` parser rejects a value
+    containing backslashes, and when it does it discards the ENTIRE FILE -- not
+    the offending line -- emitting one `warning:` and carrying on. So a Windows
+    team running
+
+        uv run --env-file .env dg dev --target-path dagster
+
+    would get Dagster with no DAGSTER_HOME (ephemeral instance, materializations
+    never persist, so missions D1 and D3 have nothing to observe), no
+    ROOTSMARKT_DSN and no SUPPLYHUB_TOKEN. It presents as "Dagster is broken"
+    rather than "your configuration was dropped".
+
+    Measured against uv's parser, which is the same on every platform:
+
+        DAGSTER_HOME=C:\\Users\\bao\\repo\\.dagster     whole file discarded
+        DAGSTER_HOME="C:\\Users\\bao\\repo\\.dagster"   whole file discarded
+        DAGSTER_HOME='C:\\Users\\bao\\repo\\.dagster'   parses
+        DAGSTER_HOME=C:/Users/bao/repo/.dagster    parses
+
+    Forward slashes rather than single quotes: Windows accepts them everywhere
+    that matters (Python, Dagster, Docker), and it keeps the file free of
+    quoting rules that the next person to edit it by hand would have to know.
+    """
+    if hasattr(path, "as_posix"):          # any pathlib flavour, including PureWindowsPath
+        return path.as_posix()
+    return str(path).replace("\\", "/")     # a plain string that may already hold separators
+
+
+def _env_body(cfg: dict, base: str, dsn: str, airflow_dsn: str,
+              dagster_home, config_path) -> str:
+    """The contents of `.env`. Separated out so it can be tested with Windows
+    paths from any platform -- see cli/tests/test_env_file.py."""
+    return "\n".join(
+        [
+            "# Written by `roots join`. Do not commit.",
+            "# Paths use forward slashes on every platform -- see _env_path_value().",
+            f"LAB_URL={base}",
+            f"TEAM_ID={cfg['team_id']}",
+            f"SUPPLYHUB_TOKEN={cfg['supplyhub_token']}",
+            f"SUPPLYHUB_BASE_URL={cfg.get('supplyhub_base_url', base)}",
+            f"ROOTSMARKT_SCHEMA={cfg['warehouse']['schema']}",
+            f"ROOTSMARKT_DSN={dsn}",
+            "# Pre-provisioned so mission A3 is about dependencies, not credentials.",
+            f"AIRFLOW_CONN_ROOTSMARKT_DW={airflow_dsn}",
+            "# Dagster needs this to persist its event log. Without it Dagster",
+            "# uses a temporary instance, materializations vanish between runs,",
+            "# and missions D1 and D3 have nothing to observe.",
+            f"DAGSTER_HOME={_env_path_value(dagster_home)}",
+            "# Absolute, so subprocesses and subdirectories resolve it. Ignored",
+            "# inside the Airflow container, which finds the mounted copy instead.",
+            f"ROOTSMARKT_CONFIG={_env_path_value(config_path)}",
+            "",
+        ]
+    )
+
+
 @app.command()
 def join(code: str, lab_url: str = typer.Option("", help="Lab server base URL")):
     """Exchange a join code for this team's configuration. Run once."""
@@ -129,7 +234,7 @@ def join(code: str, lab_url: str = typer.Option("", help="Lab server base URL"))
         raise typer.Exit(1)
 
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(yaml.safe_dump(cfg, sort_keys=False))
+    CONFIG_PATH.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
 
     wh = cfg["warehouse"]
     dsn = wh["dsn"]
@@ -145,27 +250,8 @@ def join(code: str, lab_url: str = typer.Option("", help="Lab server base URL"))
         "@127.0.0.1", "@host.docker.internal"
     )
     ENV_PATH.write_text(
-        "\n".join(
-            [
-                "# Written by `roots join`. Do not commit.",
-                f"LAB_URL={base}",
-                f"TEAM_ID={cfg['team_id']}",
-                f"SUPPLYHUB_TOKEN={cfg['supplyhub_token']}",
-                f"SUPPLYHUB_BASE_URL={cfg.get('supplyhub_base_url', base)}",
-                f"ROOTSMARKT_SCHEMA={wh['schema']}",
-                f"ROOTSMARKT_DSN={dsn}",
-                "# Pre-provisioned so mission A3 is about dependencies, not credentials.",
-                f"AIRFLOW_CONN_ROOTSMARKT_DW={airflow_dsn}",
-                "# Dagster needs this to persist its event log. Without it Dagster",
-                "# uses a temporary instance, materializations vanish between runs,",
-                "# and missions D1 and D3 have nothing to observe.",
-                f"DAGSTER_HOME={dagster_home}",
-                "# Absolute, so subprocesses and subdirectories resolve it. Ignored",
-                "# inside the Airflow container, which finds the mounted copy instead.",
-                f"ROOTSMARKT_CONFIG={CONFIG_PATH.resolve()}",
-                "",
-            ]
-        )
+        _env_body(cfg, base, dsn, airflow_dsn, dagster_home, CONFIG_PATH.resolve()),
+        encoding="utf-8",
     )
     _ok(f"joined as {cfg['team_id']}")
     typer.echo(f"  wrote {CONFIG_PATH}, {ENV_PATH} and {dagster_home}/")
@@ -274,6 +360,55 @@ def doctor(report: bool = typer.Option(False, help="Terse output for the instruc
 
     section("config", _config)
 
+    # ------------------------------------------------------------ environment
+
+    def _environment() -> None:
+        """Catch the two things that break silently rather than loudly."""
+        if not ENV_PATH.exists():
+            # A warning, not a failure: `config` above already reports the one
+            # actionable cause (`roots join` has not run), and the warehouse
+            # check reports the consequence. Counting it a third time teaches
+            # people that the failure count is noise.
+            _warn(f"{ENV_PATH} missing -- run `roots join <code>`")
+            return
+
+        # THE Windows failure. uv's --env-file parser rejects a value containing
+        # a backslash and discards the WHOLE FILE, warning once and carrying on.
+        # Dagster then runs with no DAGSTER_HOME, no DSN and no token, which
+        # presents as "Dagster is broken" from four layers away.
+        offenders = [
+            line.split("=", 1)[0]
+            for line in ENV_PATH.read_text(encoding="utf-8").splitlines()
+            if "=" in line and not line.lstrip().startswith("#") and "\\" in line.split("=", 1)[1]
+        ]
+        if offenders:
+            fail(
+                f"{ENV_PATH} has backslashes in: {', '.join(offenders)}. "
+                "uv discards the ENTIRE env file when it sees one, so Dagster would "
+                "start with no configuration at all. Re-run `roots join <code>`, which "
+                "now writes forward slashes."
+            )
+        else:
+            _ok(f"{ENV_PATH} parses (no backslashes in values)")
+
+        root = _repo_root()
+        text = str(root)
+        if text.startswith("\\\\") or text.startswith("//"):
+            _warn(
+                f"the repo is on a network path ({text[:40]}...). Docker Desktop file "
+                "sharing is unreliable there -- move it to a local disk"
+            )
+        elif len(text) > 150:
+            _warn(
+                f"the repo path is {len(text)} characters deep. Windows has a 260-character "
+                "limit that `astro dev start` can hit when it mounts the project -- "
+                "consider moving the repo nearer the drive root"
+            )
+        else:
+            _ok(f"repo path is usable ({len(text)} chars)")
+
+    section("environment", _environment)
+
     # ---------------------------------------------------------------- docker
 
     def _docker() -> None:
@@ -295,7 +430,7 @@ def doctor(report: bool = typer.Option(False, help="Terse output for the instruc
             return
         out = _run(["astro", "version"], timeout=20)
         if out is None:
-            fail(f"astro not found. Install it pinned, without Podman:\n{ASTRO_INSTALL_HINT}")
+            fail(f"astro not found. Install it pinned, without Podman:\n{astro_install_hint()}")
             return
 
         reported = out.stdout.strip().splitlines()[0] if out.stdout.strip() else "unknown"
@@ -312,7 +447,7 @@ def doctor(report: bool = typer.Option(False, help="Terse output for the instruc
             _warn(
                 f"astro {found} is off-pin (course pins {ASTRO_PINNED}). "
                 f"Usually harmless, but if Airflow misbehaves, install the pinned CLI:\n"
-                f"{ASTRO_INSTALL_HINT}"
+                f"{astro_install_hint()}"
             )
 
         img = _run(["docker", "images", "-q", ASTRO_RUNTIME_IMAGE])
@@ -353,7 +488,7 @@ def doctor(report: bool = typer.Option(False, help="Terse output for the instruc
         # rather than at minute 20 of the Dagster half.
         if not (Path("dagster") / "pyproject.toml").exists():
             fail("dagster/pyproject.toml missing -- the dg project is not there")
-        elif "[tool.dg]" not in (Path("dagster") / "pyproject.toml").read_text():
+        elif "[tool.dg]" not in (Path("dagster") / "pyproject.toml").read_text(encoding="utf-8"):
             fail("dagster/pyproject.toml has no [tool.dg] section -- `dg dev` will refuse")
         else:
             _ok("launch: uv run --env-file .env dg dev --target-path dagster")
@@ -395,7 +530,10 @@ def doctor(report: bool = typer.Option(False, help="Terse output for the instruc
         if api.healthy(base):
             _ok(f"{base} reachable")
         else:
-            _warn(f"{base} unreachable -- you can still work; try `roots offline`")
+            _warn(
+                f"{base} unreachable -- you can still work. Ask your instructor for "
+                "the lab address, then: roots online --lab-url http://<address>:8090"
+            )
 
     section("lab server", _lab)
 
@@ -638,19 +776,44 @@ def submit_d4(
 
 
 # -------------------------------------------------------------------- offline
+#
+# `roots offline` is INSTRUCTOR-ONLY and is registered only where `lab/` exists.
+#
+# It starts the lab from `lab/docker-compose.yml`, and `lab/` is deliberately
+# excluded from the participant repository (D-047) -- it holds the admin token,
+# the A2 quirk and the generator that can compute every team's data. So in the
+# student repo the command could never have worked; it would have failed with
+# "lab/docker-compose.yml not found" at the exact moment a team needed it most.
+#
+# The participant-facing fallback is `roots online --lab-url <instructor's IP>`
+# against a lab the instructor hosts from their own machine (D-052). That is a
+# real reduction in resilience compared with what D-022 originally promised, and
+# it is written down rather than papered over.
 
 
-@app.command()
-def offline(compose_file: Path = typer.Option(Path("lab/docker-compose.yml"))):
-    """Fall back to a fully local lab: local SupplyHub mock and local Postgres.
+def _lab_project_present() -> bool:
+    return (_repo_root() / "lab" / "docker-compose.yml").is_file()
 
-    Because delivery data is a pure function of (team_id, business_date), the
-    local mock serves byte-identical data -- every file already on disk and every
-    figure already loaded stays valid.
 
-    Lost: the dashboard, and the story gating (the local mock publishes
-    everything at once). The game degrades; the learning does not.
-    """
+if _lab_project_present():
+
+    @app.command()
+    def offline(compose_file: Path = typer.Option(Path("lab/docker-compose.yml"))):
+        """INSTRUCTOR: start the lab locally (SupplyHub mock + Postgres).
+
+        Because delivery data is a pure function of (team_id, business_date),
+        this serves byte-identical data to the hosted lab -- every file already
+        on disk and every figure already loaded stays valid.
+
+        Lost: the dashboard, and the story gating (this publishes everything at
+        once). The game degrades; the learning does not.
+
+        Teams point at it with `roots online --lab-url http://<your-ip>:8090`.
+        """
+        _offline_impl(compose_file)
+
+
+def _offline_impl(compose_file: Path) -> None:
     if not compose_file.exists():
         typer.secho(f"{compose_file} not found", fg=typer.colors.RED)
         raise typer.Exit(1)
@@ -666,17 +829,23 @@ def offline(compose_file: Path = typer.Option(Path("lab/docker-compose.yml"))):
 
     _rewrite_env({"SUPPLYHUB_BASE_URL": "http://localhost:8090",
                   "LAB_URL": "http://localhost:8090"})
-    _ok("offline mode: SupplyHub and the lab server are now local")
-    typer.echo("  Provision your team locally, then re-run `roots doctor`.")
-    typer.echo("  Back online later with: roots online")
+    _ok("local lab started: SupplyHub and the lab server are now local")
+    typer.echo("  Provision teams with `lab provision`, then tell the room:")
+    typer.echo("    roots online --lab-url http://<your-ip>:8090")
 
 
 @app.command()
-def online(lab_url: str = typer.Option(..., help="The hosted lab URL")):
-    """Point back at the hosted lab."""
+def online(lab_url: str = typer.Option(..., help="The lab URL to point at")):
+    """Point at a different lab server.
+
+    This is the fallback when the hosted lab is unreachable: the instructor runs
+    the lab on their own machine and gives the room its address, which may be a
+    phone hotspot or an ad-hoc LAN rather than the venue network.
+    """
     base = lab_url.rstrip("/")
     _rewrite_env({"SUPPLYHUB_BASE_URL": base, "LAB_URL": base})
-    _ok(f"back online against {base}")
+    _ok(f"now pointing at {base}")
+    typer.echo("  Re-run `roots doctor` to confirm it is reachable.")
 
 
 # ------------------------------------------------------- hints and checkpoints
@@ -711,7 +880,7 @@ def hint(mission: str = typer.Argument(..., help="a1..a5, d1..d4")):
     index = min(already, len(available) - 1) if already >= len(available) else already
 
     typer.echo("")
-    typer.echo(available[index].read_text().strip())
+    typer.echo(available[index].read_text(encoding="utf-8").strip())
     typer.echo("")
 
     remaining = len(available) - (index + 1)
@@ -908,15 +1077,38 @@ def _warehouse_diagnosis(dsn: str, exc: Exception) -> list[str]:
 
 
 def _rewrite_env(updates: dict[str, str]) -> None:
-    lines = ENV_PATH.read_text().splitlines() if ENV_PATH.exists() else []
+    lines = ENV_PATH.read_text(encoding="utf-8").splitlines() if ENV_PATH.exists() else []
     keys = set(updates)
     kept = [line for line in lines if line.split("=", 1)[0].strip() not in keys]
     kept += [f"{k}={v}" for k, v in updates.items()]
-    ENV_PATH.write_text("\n".join(kept) + "\n")
+    ENV_PATH.write_text("\n".join(kept) + "\n", encoding="utf-8")
 
 
 def main() -> None:
+    _force_utf8_output()
     app()
+
+
+def _force_utf8_output() -> None:
+    """Make stdout/stderr able to carry the characters the course text uses.
+
+    The mission briefs and hints contain em dashes, EUR signs and arrows. On a
+    Windows console the interactive stream handles them, but a REDIRECTED one
+    (`roots status > out.txt`, or any CI capture) falls back to the ANSI code
+    page -- cp1252 in Belgium -- and printing an arrow raises UnicodeEncodeError
+    from inside a command that had otherwise succeeded.
+
+    `errors="replace"` rather than "strict" on purpose: a lost glyph is a
+    cosmetic problem, and a pre-flight tool that dies while reporting is not.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:       # already wrapped, or not a real stream
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):  # detached or non-reconfigurable stream
+            pass
 
 
 if __name__ == "__main__":

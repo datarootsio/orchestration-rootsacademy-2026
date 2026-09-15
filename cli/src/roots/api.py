@@ -22,7 +22,7 @@ def lab_url(override: str | None = None) -> str:
             return os.environ[key].rstrip("/")
     env = Path(".env")
     if env.exists():
-        for line in env.read_text().splitlines():
+        for line in env.read_text(encoding="utf-8").splitlines():
             if line.startswith("LAB_URL="):
                 return line.split("=", 1)[1].strip().rstrip("/")
     return "http://localhost:8090"
