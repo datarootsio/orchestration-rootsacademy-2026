@@ -33,6 +33,8 @@ def progress() -> dict:
     data.setdefault("reported", [])   # files written before reporting was tracked
     data.setdefault("hints", {})      # mission -> how many hints have been shown
     data.setdefault("adopted", {})    # mission -> when a checkpoint was adopted
+    data.setdefault("submissions", {})  # milestone -> the evidence, for re-sending
+    data.setdefault("team_id", None)    # whose progress this is; see clear_for_team()
     return data
 
 
@@ -94,6 +96,98 @@ def mark_reported(name: str) -> None:
     if name not in data["reported"]:
         data["reported"].append(name)
     PROGRESS.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def joined_team() -> str | None:
+    """Which team this machine's progress belongs to."""
+    return progress().get("team_id")
+
+
+def clear_for_team(team_id: str) -> bool:
+    """Bind local progress to `team_id`, wiping it if it belonged to another.
+
+    `.roots/progress.json` had no team in it at all, and `roots join` never
+    touched it -- so joining a different team carried the previous team's
+    milestones across and reported them under the new identity. A team that
+    mistypes a join code, joins the wrong team and then re-joins correctly would
+    take the wrong team's progress with them.
+
+    Hints and checkpoint adoptions are MACHINE facts, not team facts: which
+    hints this laptop has read does not belong to whoever it reports as. They
+    survive.
+
+    Returns True if progress was wiped, so the caller can say so.
+    """
+    data = progress()
+    previous = data.get("team_id")
+    if previous == team_id:
+        return False
+    if previous is None and not data["earned"]:
+        data["team_id"] = team_id          # first join on a clean machine
+        _write(data)
+        return False
+    data.update({
+        "team_id": team_id,
+        "earned": {},
+        "reported": [],
+        "submissions": {},
+        "last_run": None,
+    })
+    _write(data)
+    QUEUE.unlink(missing_ok=True)
+    return True
+
+
+def clear_progress() -> dict:
+    """Forget every milestone this machine has earned. Returns what was dropped.
+
+    The client half of `lab reset`, which never existed. It matters more since
+    milestones re-sync (D-062): a server-side reset alone no longer clears a
+    board, because any machine still holding local state re-reports into it.
+
+    Hints and adoptions survive, for the same reason as above.
+    """
+    data = progress()
+    dropped = {"earned": len(data["earned"]), "submissions": len(data.get("submissions", {}))}
+    data.update({"earned": {}, "reported": [], "submissions": {}, "last_run": None})
+    _write(data)
+    QUEUE.unlink(missing_ok=True)
+    return dropped
+
+
+def forget_reported(names) -> list[str]:
+    """Drop milestones the lab server no longer has, so they are sent again.
+
+    `reported` is the client's record of what the server CONFIRMED. `lab reset`
+    can take those rows back, and without this the client would keep skipping
+    them forever -- earned locally, absent from the dashboard, unreachable by any
+    amount of re-running (D-062).
+
+    Returns what was forgotten, so the caller can say so out loud rather than
+    healing silently.
+    """
+    data = progress()
+    forgotten = [n for n in data["reported"] if n in set(names)]
+    if forgotten:
+        data["reported"] = [n for n in data["reported"] if n not in set(forgotten)]
+        _write(data)
+    return forgotten
+
+
+def remember_submission(name: str, payload: dict) -> None:
+    """Keep a submission's evidence so it can be re-sent after a server reset.
+
+    Client checks re-derive themselves from the pipeline; submissions cannot --
+    the evidence was typed once by a human. Storing only the word "submitted"
+    meant a reset destroyed it permanently.
+    """
+    data = progress()
+    data.setdefault("submissions", {})[name] = payload
+    _write(data)
+
+
+def submissions() -> dict:
+    return dict(progress().get("submissions", {}))
 
 
 def record(name: str, detail: str = "") -> bool:

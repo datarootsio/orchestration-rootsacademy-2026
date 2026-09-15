@@ -110,6 +110,19 @@ def post_milestone(base: str, team_id: str, token: str, name: str, payload: dict
     return _call("POST", f"{base}/v1/teams/{team_id}/milestones/{name}", token, payload)
 
 
+def team_state(base: str, team_id: str) -> dict:
+    """What the LAB SERVER believes this team has earned.
+
+    Unauthenticated, like the dashboard's own poll -- it exposes nothing a team
+    cannot already see on the projector.
+
+    Used to reconcile: the client's `reported` set records what the server once
+    confirmed, and `lab reset` can take those rows away again. Without asking,
+    the client would never learn it had happened (D-062).
+    """
+    return _call("GET", f"{base}/v1/teams/{team_id}")
+
+
 def post_adoption(base: str, team_id: str, token: str, mission: str) -> dict:
     """Tell the lab server a team adopted a checkpoint.
 

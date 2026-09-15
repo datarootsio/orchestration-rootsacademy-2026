@@ -266,6 +266,12 @@ def join(code: str, lab_url: str = typer.Option("", help="Lab server base URL"))
         encoding="utf-8",
     )
     _ok(f"joined as {cfg['team_id']}")
+    if state.clear_for_team(cfg["team_id"]):
+        _warn(
+            "local progress belonged to a different team and was cleared. "
+            "Milestones you have genuinely earned will be re-detected on the next "
+            "`roots verify` or `roots watch`."
+        )
     typer.echo(f"  wrote {CONFIG_PATH}, {ENV_PATH} and {dagster_home}/")
     typer.echo(f"  {len(cfg['expected_stores'])} expected stores, "
                f"plausible revenue {cfg['plausible_daily_revenue_eur']}")
@@ -601,9 +607,67 @@ def doctor(report: bool = typer.Option(False, help="Terse output for the instruc
 # --------------------------------------------------------------------- verify
 
 
+def _resync(cfg, base: str, quiet: bool = False) -> None:
+    """Forget any milestone the lab server no longer has, so it is sent again.
+
+    `lab reset` is a documented, recommended instructor tool -- and every reset
+    used to strand the affected teams permanently: earned locally, marked
+    reported, gone from the server, and skipped by the loop below forever
+    (D-062).
+
+    Deliberately NOT fatal, and deliberately does not prune when the server
+    cannot be reached. Treating "no answer" as "the server has nothing" would
+    make every offline team re-queue everything -- the same bug inverted, and
+    louder.
+    """
+    try:
+        server = api.team_state(base, cfg.team_id)
+    except Exception:  # noqa: BLE001 - unreachable, refused, or malformed: all "do not prune"
+        return
+    known = set(server.get("milestones") or {})
+    forgotten = state.forget_reported(set(state.reported()) - known)
+    if forgotten and not quiet:
+        _warn(
+            f"re-reporting {len(forgotten)} milestone(s) the lab server no longer has "
+            f"({', '.join(sorted(forgotten))}) -- it was probably reset"
+        )
+    _resend_submissions(cfg, base, known, quiet)
+
+
+def _resend_submissions(cfg, base: str, known: set, quiet: bool) -> None:
+    """Replay evidence the server has forgotten.
+
+    Client checks re-derive themselves on the next pass; submissions cannot,
+    because a human typed the evidence. A replay can legitimately be refused --
+    `lab reset team` also resets publications, so the world may have moved -- and
+    that path says so rather than queueing forever.
+    """
+    for name, payload in state.submissions().items():
+        if name in known:
+            continue
+        try:
+            resp = api.post_milestone(base, cfg.team_id, cfg.supplyhub_token, name, payload)
+        except api.LabRejected as exc:
+            if not quiet:
+                _warn(f"{name} could not be re-submitted: {exc}. Run `roots submit` again.")
+            continue
+        except api.LabUnreachable:
+            return
+        if resp.get("accepted") and not quiet:
+            _ok(f"re-submitted {name}")
+
+
 def _report(cfg, results: list[tuple[checks.Check, checks.CheckResult]], quiet=False) -> int:
     sent = 0
     base = api.lab_url()
+    if not quiet and _solutions_dir().is_dir():
+        # The instructor repo reports like any other client, and its runs land on
+        # a real team's dashboard. That is useful -- rehearsing end to end has
+        # caught real bugs -- but it has to be visible. It was not, and an
+        # instructor's solution runs turned up on a participant's board looking
+        # like milestones they had not earned.
+        _warn(f"instructor repo: these milestones are landing on {cfg.team_id}'s dashboard")
+    _resync(cfg, base, quiet)
     for check, result in results:
         if not quiet:
             # Collapse multi-line driver errors: psycopg and the astro CLI both
@@ -750,6 +814,8 @@ def _send(cfg, name: str, payload: dict) -> None:
         return
     if resp.get("accepted"):
         state.record(name, "submitted")
+        # Kept so a server reset does not destroy evidence a human typed once.
+        state.remember_submission(name, payload)
         _ok(f"{name} accepted")
         for key, value in resp.items():
             if key not in ("accepted", "milestone", "newly_earned"):
@@ -878,6 +944,33 @@ def _offline_impl(compose_file: Path) -> None:
     _ok("local lab started: SupplyHub and the lab server are now local")
     typer.echo("  Provision teams with `lab provision`, then tell the room:")
     typer.echo("    roots online --lab-url http://<your-ip>:8090")
+
+
+@app.command()
+def reset(yes: bool = typer.Option(False, "--yes", help="Skip the confirmation.")):
+    """Forget every milestone this machine has earned.
+
+    The client half of `lab reset`. Instructors reset the lab between sessions,
+    and since milestones re-sync (D-062) that alone no longer clears a board --
+    any machine still holding local state re-reports into the fresh lab within
+    one `roots watch` cycle. Run this on every machine being reused.
+
+    Hints you have read and checkpoints you have adopted survive: those are facts
+    about this laptop, not about whoever it reports as.
+    """
+    data = state.progress()
+    if not data["earned"]:
+        _ok("nothing to clear -- no milestones recorded on this machine")
+        return
+    typer.echo(f"This will forget {len(data['earned'])} milestone(s) on THIS machine:")
+    for name in sorted(data["earned"]):
+        typer.echo(f"    {name}")
+    typer.echo("\nThe lab server keeps whatever it already has -- this only clears here.")
+    if not yes and not typer.confirm("Continue?"):
+        typer.echo("nothing changed")
+        raise typer.Exit(0)
+    dropped = state.clear_progress()
+    _ok(f"cleared {dropped['earned']} milestone(s) and {dropped['submissions']} submission(s)")
 
 
 @app.command()
