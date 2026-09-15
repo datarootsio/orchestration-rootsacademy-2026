@@ -32,6 +32,9 @@ GATE_HINTS = ("publish", "plausib", "gate", "semantic")
 # not the loaded data product. Counting it as A3's validation step would let a
 # team earn `validation_passed` without ever validating the warehouse.
 SOURCE_CHECK_HINTS = ("deliver", "stale", "current", "fetch", "source")
+# The fetch task itself also contains "deliver" (fetch_delivery), so the A2 guard
+# probe has to exclude it or it would grade the download as the guard.
+FETCH_HINTS = ("fetch", "download", "retrieve")
 
 TIMEOUT = 60
 MAX_RUNS = 25
@@ -138,6 +141,91 @@ def validation_is_a_separate_step() -> tuple[bool, str]:
     )
 
 
+# States that mean "this task stopped the pipeline". A2 accepts a wider set than
+# A4 on purpose: its brief allows retry, wait, fail OR skip, and a team that
+# chose to skip is not wrong. A4's brief asks for a failure specifically.
+STOPPED_STATES = ("failed", "upstream_failed", "skipped")
+
+
+def _discriminates(
+    hints: tuple[str, ...],
+    stop_states: tuple[str, ...],
+    exclude: tuple[str, ...] = (),
+) -> tuple[str | None, set[str]]:
+    """Find a task matching `hints` that has BOTH succeeded and stopped.
+
+    Shared by the A2 guard and the A4 gate, which ask the same question of
+    different tasks: does this thing DISCRIMINATE? One that stops everything is
+    not a check, and neither is one that passes everything.
+
+    It is also what makes these shape checks rather than liveness checks: an
+    untouched stub raises NotImplementedError, so it can only ever fail -- never
+    succeed -- and cannot earn the milestone by being run.
+
+    Returns the discriminating task if there is one, otherwise the first
+    candidate and its states so the caller can say what is missing.
+    """
+    seen = _states_by_role(hints, exclude=exclude)
+    if not seen:
+        return None, set()
+    for task_id, states in sorted(seen.items()):
+        if "success" in states and any(s in states for s in stop_states):
+            return task_id, states
+    task_id, states = sorted(seen.items())[0]
+    return None, states | {f"__candidate__{task_id}"}
+
+
+def _candidate_name(states: set[str]) -> str:
+    for s in states:
+        if s.startswith("__candidate__"):
+            return s.removeprefix("__candidate__")
+    return "the task"
+
+
+def stale_delivery_was_blocked() -> tuple[bool, str]:
+    """`stale_delivery_blocked`: the A2 guard stops a stale delivery.
+
+    Mission A2 asks teams to make the DAG refuse to proceed on a delivery that
+    is not the one requested, and deliberately does NOT grade which response
+    they choose -- retry, wait, fail and skip are all defensible, and grading one
+    would punish a team that reasoned well and chose differently.
+
+    Not grading WHICH response is a different question from checking whether a
+    guard exists at all, which is what this does. Every one of those four
+    responses leaves the same trace: the guard passed something and stopped
+    something else.
+
+    `fetch_delivery` also matches "deliver", so it is excluded explicitly --
+    without that, the fetch task gets mistaken for the guard.
+    """
+    if not dag_runs():
+        return False, f"no runs of {DAG_ID} yet"
+
+    task_id, states = _discriminates(
+        SOURCE_CHECK_HINTS, STOPPED_STATES, exclude=FETCH_HINTS + GATE_HINTS
+    )
+    if task_id:
+        return True, f"{task_id} has both passed and stopped a delivery -- the guard discriminates"
+
+    if not states:
+        return False, (
+            "no staleness guard found. A2 asks for a task that refuses to proceed "
+            "when the delivery is not the one you requested -- the stub calls it "
+            "assert_delivery_is_current."
+        )
+    name = _candidate_name(states)
+    if "success" not in states:
+        return False, (
+            f"{name} has never succeeded -- so far it only ever stops. Run a date that "
+            "IS available (2026-03-02): a guard that blocks everything is not a guard. "
+            "If it is still raising NotImplementedError, that is why."
+        )
+    return False, (
+        f"{name} has only ever succeeded. Run 2026-03-03, which SupplyHub cannot "
+        "serve -- does your pipeline notice and stop?"
+    )
+
+
 def semantic_gate_is_enforced() -> tuple[bool, str]:
     """`semantic_gate_enforced`: the gate has both rejected and accepted.
 
@@ -153,23 +241,24 @@ def semantic_gate_is_enforced() -> tuple[bool, str]:
     if not dag_runs():
         return False, f"no runs of {DAG_ID} yet"
 
-    seen = _states_by_role(GATE_HINTS)
-    if not seen:
+    # Only "failed": A4 asks the pipeline to FAIL on an implausible figure, and a
+    # gate that merely skips would leave the bad day silently absent instead.
+    task_id, states = _discriminates(GATE_HINTS, ("failed",))
+    if task_id:
+        return True, f"{task_id} has both failed and succeeded -- the gate discriminates"
+
+    if not states:
         return False, "no gate task found -- expected something like publish_daily_revenue"
 
-    for task_id, states in sorted(seen.items()):
-        if "failed" in states and "success" in states:
-            return True, f"{task_id} has both failed and succeeded -- the gate discriminates"
-
-    task_id, states = sorted(seen.items())[0]
+    name = _candidate_name(states)
     if "failed" not in states:
         return False, (
-            f"{task_id} has never failed. Run the EUR 0 delivery (2026-03-04) -- "
+            f"{name} has never failed. Run the EUR 0 delivery (2026-03-04) -- "
             "does your pipeline stop? If that date already loads a plausible total, "
             "SupplyHub has moved on to the corrected delivery -- ask your instructor."
         )
     return False, (
-        f"{task_id} has failed but never succeeded. Run a good date (2026-03-03): "
+        f"{name} has failed but never succeeded. Run a good date (2026-03-03): "
         "a gate that rejects everything is not a gate."
     )
 

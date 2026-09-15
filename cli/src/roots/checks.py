@@ -169,6 +169,9 @@ def _airflow_check(name: str):
 CHECKS: list[Check] = [
     # Airflow
     Check("raw_delivery_landed", "A1", check_raw_delivery_landed),
+    Check("stale_delivery_blocked", "A2", _airflow_check("stale_delivery_was_blocked"),
+          "checks the SHAPE: a guard that both passes and stops deliveries. "
+          "Which response you chose is NOT graded"),
     Check("warehouse_loaded", "A3", check_warehouse_loaded),
     Check("validation_passed", "A3", _airflow_check("validation_is_a_separate_step"),
           "checks the SHAPE: a distinct validation task must have succeeded"),

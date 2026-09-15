@@ -17,12 +17,16 @@ Work through these in order. Each one is 15–20 minutes.
 ## The two commands you will use constantly
 
 ```
-roots verify a2      # check your work, report it to the dashboard
+roots verify a3      # check your work, report it to the dashboard
 roots status         # what this machine thinks you have earned
 ```
 
 `roots watch` is running in the background and does this for you every 20 seconds.
 `roots verify` is for when you do not want to wait.
+
+**A2, D3 and D4 are graded on what you submit**, not on an automatic check — use
+`roots submit …` for those, then `roots status` to see it landed. (A2 also has a
+check on the guard you build; D3 and D4 have none.)
 
 ## When you are stuck
 

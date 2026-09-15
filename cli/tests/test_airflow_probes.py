@@ -179,3 +179,120 @@ def test_log_brackets_are_still_skipped_when_ansi_is_present():
         '\x1b[0m[{"dag_id": "d", "run_id": "r", "state": "failed"}]\n'
     )
     assert ap._json(text)[0]["state"] == "failed"
+
+
+# --------------------------------------------- A2: the staleness guard (D-060)
+#
+# A2 deliberately does NOT grade which response a team chose -- retry, wait, fail
+# and skip are all defensible. What it does check is that a guard exists at all,
+# which every one of those four leaves the same trace for: the guard passed
+# something and stopped something else.
+
+R1, R2 = RUNS[0]["run_id"], RUNS[1]["run_id"]
+
+
+def test_the_fail_response_passes(wire):
+    """The reference solution: raise AirflowFailException on a stale delivery."""
+    wire({
+        R1: _states(fetch_delivery="success", assert_delivery_is_current="failed"),
+        R2: _states(fetch_delivery="success", assert_delivery_is_current="success"),
+    })
+    ok, detail = ap.stale_delivery_was_blocked()
+    assert ok, detail
+    assert "assert_delivery_is_current" in detail
+
+
+def test_the_skip_response_passes(wire):
+    """A team that marks the run skipped rather than failed reasoned differently,
+    not worse. Grading only `failed` would punish them for it."""
+    wire({
+        R1: _states(fetch_delivery="success", check_delivery_is_current="skipped"),
+        R2: _states(fetch_delivery="success", check_delivery_is_current="success"),
+    })
+    ok, detail = ap.stale_delivery_was_blocked()
+    assert ok, detail
+
+
+def test_an_untouched_stub_does_not_pass(wire):
+    """THE test that makes this a shape check rather than a liveness check.
+
+    The shipped stub raises NotImplementedError, so it can only ever fail. If
+    merely running it earned the milestone, a team could skip mission task 4
+    entirely and still go green.
+    """
+    wire({
+        R1: _states(fetch_delivery="success", assert_delivery_is_current="failed"),
+        R2: _states(fetch_delivery="success", assert_delivery_is_current="failed"),
+    })
+    ok, detail = ap.stale_delivery_was_blocked()
+    assert not ok
+    assert "never succeeded" in detail
+    assert "NotImplementedError" in detail
+
+
+def test_a_guard_that_never_stops_anything_does_not_pass(wire):
+    """The other direction. A guard that passes everything is not a guard --
+    the same reasoning as the A4 gate."""
+    wire({
+        R1: _states(fetch_delivery="success", assert_delivery_is_current="success"),
+        R2: _states(fetch_delivery="success", assert_delivery_is_current="success"),
+    })
+    ok, detail = ap.stale_delivery_was_blocked()
+    assert not ok
+    assert "2026-03-03" in detail
+
+
+def test_no_guard_at_all_says_so(wire):
+    """A1 complete, A2 not started: only the fetch exists."""
+    wire({
+        R1: _states(fetch_delivery="success"),
+        R2: _states(fetch_delivery="success"),
+    })
+    ok, detail = ap.stale_delivery_was_blocked()
+    assert not ok
+    assert "no staleness guard found" in detail
+
+
+def test_the_fetch_task_is_not_mistaken_for_the_guard(wire):
+    """`fetch_delivery` contains "deliver", the same hint the guard matches on.
+
+    Without the explicit exclusion the fetch would be graded as the guard -- and
+    since it legitimately both succeeds and fails over a course, the milestone
+    would light up for a team that never wrote a guard at all.
+    """
+    wire({
+        R1: _states(fetch_delivery="failed"),
+        R2: _states(fetch_delivery="success"),
+    })
+    ok, detail = ap.stale_delivery_was_blocked()
+    assert not ok, f"fetch_delivery was mistaken for the guard: {detail}"
+    assert "no staleness guard found" in detail
+
+
+def test_the_a4_gate_is_not_mistaken_for_the_guard(wire):
+    """publish_daily_revenue discriminates too, but it is A4's milestone."""
+    wire({
+        R1: _states(fetch_delivery="success", publish_daily_revenue="failed"),
+        R2: _states(fetch_delivery="success", publish_daily_revenue="success"),
+    })
+    ok, _ = ap.stale_delivery_was_blocked()
+    assert not ok
+
+
+def test_no_runs_yet(wire):
+    wire({}, runs=[])
+    ok, detail = ap.stale_delivery_was_blocked()
+    assert not ok
+    assert "no runs" in detail
+
+
+def test_the_a4_gate_still_requires_an_actual_failure(wire):
+    """A2 accepts `skipped` as a stop; A4 must not. Its brief asks the pipeline
+    to FAIL on an implausible figure -- a gate that merely skips would leave the
+    bad day silently absent instead of loudly wrong."""
+    wire({
+        R1: _states(publish_daily_revenue="skipped"),
+        R2: _states(publish_daily_revenue="success"),
+    })
+    ok, _ = ap.semantic_gate_is_enforced()
+    assert not ok

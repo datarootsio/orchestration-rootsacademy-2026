@@ -231,6 +231,11 @@ def join(code: str, lab_url: str = typer.Option("", help="Lab server base URL"))
     typer.echo(f"joining via {base} ...")
     try:
         cfg = api.fetch_config(code, base)
+    except api.LabRejected as exc:
+        typer.secho(f"the lab server refused that join code: {exc}", fg=typer.colors.RED)
+        typer.secho("Check the code with your instructor -- they are exact.",
+                    fg=typer.colors.YELLOW)
+        raise typer.Exit(1)
     except api.LabUnreachable as exc:
         typer.secho(f"could not join: {exc}", fg=typer.colors.RED)
         typer.secho(
@@ -622,6 +627,12 @@ def _report(cfg, results: list[tuple[checks.Check, checks.CheckResult]], quiet=F
             api.post_milestone(base, cfg.team_id, cfg.supplyhub_token, check.milestone, {})
             state.mark_reported(check.milestone)
             sent += 1
+        except api.LabRejected as exc:
+            # NOT queued: the server answered and refused, so retrying forever
+            # cannot help. This used to be reported as "unreachable" while the
+            # server was up -- a misdiagnosis that sent people to the network.
+            if not quiet:
+                _warn(f"{check.milestone} refused by the lab server: {exc}")
         except api.LabUnreachable:
             state.enqueue(check.milestone, {})
             if not quiet:
@@ -638,6 +649,8 @@ def _flush(cfg) -> int:
                 base, cfg.team_id, cfg.supplyhub_token, item["milestone"], item["payload"]
             )
             flushed += 1
+        except api.LabRejected:
+            continue                      # dropped: requeuing could never succeed
         except api.LabUnreachable:
             state.enqueue(item["milestone"], item["payload"])
             break
@@ -728,6 +741,9 @@ def _send(cfg, name: str, payload: dict) -> None:
         resp = api.post_milestone(
             api.lab_url(), cfg.team_id, cfg.supplyhub_token, name, payload
         )
+    except api.LabRejected as exc:
+        typer.secho(f"the lab server refused it: {exc}", fg=typer.colors.RED)
+        return
     except api.LabUnreachable as exc:
         state.enqueue(name, payload)
         typer.secho(f"queued -- {exc}", fg=typer.colors.YELLOW)
@@ -984,6 +1000,8 @@ def checkpoint(
         try:
             api.post_adoption(api.lab_url(), cfg.team_id, cfg.supplyhub_token, key)
             typer.echo("  reported to the lab server")
+        except api.LabRejected as exc:
+            typer.echo(f"  (not reported: the lab server refused it -- {exc})")
         except api.LabUnreachable:
             typer.echo("  (not reported: lab server unreachable -- this is fine)")
 

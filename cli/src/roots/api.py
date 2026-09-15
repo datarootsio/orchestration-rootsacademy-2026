@@ -10,7 +10,17 @@ from pathlib import Path
 
 
 class LabUnreachable(RuntimeError):
-    pass
+    """The lab server could not be reached. Retrying later may work."""
+
+
+class LabRejected(RuntimeError):
+    """The lab server answered and refused. Retrying will not help.
+
+    Split from LabUnreachable because conflating them misdiagnoses out loud: a
+    404 `unknown milestone` was reported to participants as "lab server
+    unreachable" while the server was up and answering -- and then queued for
+    retry, which could never succeed.
+    """
 
 
 # Written by `lab host` before the student repo is built, so the repository a
@@ -87,7 +97,7 @@ def _call(method: str, url: str, token: str = "", body: dict | None = None, time
                 return {"raw": raw.decode(errors="replace")}
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")[:300]
-        raise LabUnreachable(f"HTTP {exc.code}: {detail}") from exc
+        raise LabRejected(f"HTTP {exc.code}: {detail}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise LabUnreachable(f"cannot reach the lab server at {url}: {exc}") from exc
 

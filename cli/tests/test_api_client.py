@@ -89,12 +89,23 @@ def test_healthy_never_raises_on_a_malformed_url():
 def test_call_parses_json(server):
     body = api._call("GET", f"{server}/v1/state")
     assert isinstance(body, dict)
-    assert len(body["milestones"]) == 14
+    assert len(body["milestones"]) == 15
 
 
-def test_call_raises_lab_unreachable_on_http_error(server):
-    with pytest.raises(api.LabUnreachable, match="HTTP 404"):
+def test_an_http_error_is_a_rejection_not_unreachability(server):
+    """The server ANSWERED. Calling that "unreachable" sends people to the
+    network when the problem is their input -- and got a 404 `unknown milestone`
+    reported as a dead lab server while the lab was up and healthy."""
+    with pytest.raises(api.LabRejected, match="HTTP 404"):
         api._call("GET", f"{server}/v1/config/ZZZZZZ")
+
+
+def test_a_rejection_is_not_caught_as_unreachable(server):
+    """They must not be interchangeable: one is worth retrying, the other never
+    is, and the queue depends on telling them apart."""
+    with pytest.raises(api.LabRejected):
+        api._call("GET", f"{server}/v1/config/ZZZZZZ")
+    assert not issubclass(api.LabRejected, api.LabUnreachable)
 
 
 def test_call_raises_lab_unreachable_on_connection_refused():
@@ -118,9 +129,21 @@ def test_fetch_config_and_post_milestone(server):
     assert resp["accepted"] is True
 
 
-def test_post_milestone_with_a_bad_token_is_unreachable_not_a_crash(server):
-    with pytest.raises(api.LabUnreachable, match="HTTP 401"):
+def test_post_milestone_with_a_bad_token_is_a_rejection(server):
+    """A wrong token is not a network problem, and telling a participant the lab
+    is unreachable would send them to debug the wrong thing entirely."""
+    with pytest.raises(api.LabRejected, match="HTTP 401"):
         api.post_milestone(server, "team-00", "wrong-token", "warehouse_loaded", {})
+
+
+def test_an_unknown_milestone_is_a_rejection(server):
+    """The case that exposed this: a milestone the server does not know -- because
+    it is running older code than the CLI -- must not be queued for retry."""
+    team = lab_api.store().teams()[0]
+    with pytest.raises(api.LabRejected, match="HTTP 404"):
+        api.post_milestone(
+            server, team["team_id"], team["token"], "not_a_real_milestone", {}
+        )
 
 
 # --------------------------------------------------------------- lab_url rules
