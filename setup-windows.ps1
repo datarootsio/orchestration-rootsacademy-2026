@@ -200,8 +200,18 @@ $astroTarget = Join-Path $InstallDir 'astro.exe'
 $needAstro = $true
 
 if (Test-Command 'astro') {
-    $found = (& astro version 2>$null | Out-String)
-    if ($found -match '(\d+\.\d+\.\d+)') {
+    $found = ''
+    $astroExitCode = -1
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5.1 emits native stderr as error records under Stop.
+        $ErrorActionPreference = 'Continue'
+        $found = (& astro version 2>$null | Out-String)
+        $astroExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($astroExitCode -eq 0 -and $found -match '(\d+\.\d+\.\d+)') {
         if ($Matches[1] -eq $AstroVersion) {
             Write-Ok "astro $AstroVersion already installed"
             $needAstro = $false
