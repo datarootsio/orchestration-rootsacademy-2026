@@ -45,8 +45,35 @@ You need three things: **Docker Desktop**, **uv**, and the **Astro CLI**.
 ```bash
 brew install --cask docker          # then OPEN it, and leave it running
 brew install uv
-brew install astronomer/tap/astro@1.42.1 --without-podman
 ```
+
+Then the Astro CLI. **Download it directly** — the version is pinned for this
+course, and the download is the only way to get exactly it:
+
+```bash
+curl -sSLo /tmp/astro.tgz https://github.com/astronomer/astro-cli/releases/download/v1.42.1/astro_1.42.1_darwin_arm64.tar.gz
+shasum -a 256 /tmp/astro.tgz
+tar -xzf /tmp/astro.tgz -C /tmp astro
+sudo mv /tmp/astro /usr/local/bin/astro
+```
+
+The `shasum` line must print:
+
+```
+87c25a9652b420f47c067a80671cdf48bfc6607f2dc13d198a6f75addc34c026
+```
+
+**On an Intel Mac** use `astro_1.42.1_darwin_amd64.tar.gz` instead, and expect
+`5346b505c5bb63dbe96092cc385716cc3f0106519df3c8e49e6b647498c6366d`.
+
+No `sudo`? Put it somewhere you own instead — `mkdir -p ~/.local/bin && mv /tmp/astro ~/.local/bin/`
+— and make sure that directory is on your `PATH`.
+
+> **Homebrew works too**, but read this first: `brew install astronomer/tap/astro@1.42.1` also
+> installs Podman, because the formula recommends it. That is harmless — the Astro CLI looks for
+> `docker` before `podman` — but it is ~100MB you did not ask for. Do **not** add
+> `--without-podman`: current Homebrew rejects it outright with `invalid option`. And do not use
+> plain `brew install astro`, which is a different, unpinned version.
 
 Then pull the Airflow image now rather than on the day:
 
@@ -96,10 +123,9 @@ astro version                                 # 1.42.1
 ```
 
 **If it fails**
-- `astro version` reports something other than 1.42.1 → on macOS you installed
-  the wrong formula. It must be `astronomer/tap/astro@1.42.1`, not plain
-  `brew install astro`, and `--without-podman` matters: without it you get
-  Podman, and this course assumes Docker.
+- `astro version` reports something other than 1.42.1 → on macOS you have a
+  different Astro on your `PATH`. `which astro` tells you where it is; the
+  download above puts 1.42.1 in `/usr/local/bin`.
 - `astro` not found on Windows → you did not open a **new** terminal after the
   script added it to PATH.
 - `docker info` errors → Docker Desktop is installed but not *running*. Open it.
@@ -317,6 +343,7 @@ policing it, but because it is literally about different data.
 | `password authentication failed for user "team_NN"` | Your credentials are fine — something else is on that port. `roots doctor` explains |
 | Airflow UI not on 8080 | Astro picked another port. Read what `astro dev start` printed |
 | A DAG stopped appearing | It failed to parse. `astro dev pytest` gives a readable error |
+| `roots verify` takes ~30s the first time | Expected. It reads your Airflow run history, and each read is a container call. Later runs take a few seconds — the finished runs are cached |
 | Mission A1 cannot reach SupplyHub | `roots doctor` checks that address separately — it is not the same one as the dashboard |
 
 **If the lab server becomes unreachable**, your work is not lost: milestones are

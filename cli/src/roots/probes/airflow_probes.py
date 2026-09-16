@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from pathlib import Path
 
 DAG_ID = "rootsmarkt_delivery"
 CONSUMER_DAG_ID = "rootsmarkt_finance_report"
@@ -89,13 +90,109 @@ def _json(text: str):
     raise AirflowUnavailable(f"no JSON in Airflow output: {text.strip()[-200:]!r}")
 
 
+# --------------------------------------------------------------------- caching
+#
+# Every `astro dev run` is a container exec and costs ~3s -- that is the floor,
+# and Airflow's CLI has no bulk form for `tasks states-for-dag-run`.
+#
+# What was NOT the floor: all four Airflow probes fetched the same data and then
+# filtered it differently in memory. With 12 runs that was 56 calls and ~110s per
+# `roots verify`, which also made `roots watch` slower than its own interval --
+# so the dashboard the instructor steers by lagged reality by minutes.
+#
+# Two layers:
+#   per pass   dag_runs() and task_states() fetched once, shared by every probe
+#   across     a FINISHED run's task states are persisted, so later passes only
+#              fetch runs they have not seen
+#
+# The trap in the second one: a finished run is not immutable. Clearing a task in
+# Airflow puts the run back to `running` and re-runs it, so a cached `failed`
+# could hide a later `success`. Entries are therefore validated against the run's
+# (state, end_date), which `dags list-runs` already gives us -- clearing changes
+# end_date, which misses the cache and refetches.
+
+TERMINAL_RUN_STATES = ("success", "failed")
+CACHE_PATH = Path(".roots") / "airflow-runs.json"
+
+_pass: dict = {}
+
+
+def begin_pass() -> None:
+    """Start a new check pass. Called once per `roots verify` / `watch` cycle.
+
+    Without this the memo would persist for the life of the process and `watch`
+    would never see a run made after it started.
+    """
+    _pass.clear()
+
+
+def _read_cache() -> dict:
+    """Never fatal: a performance cache that can break a milestone check is not
+    worth having."""
+    try:
+        return json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_cache(cache: dict) -> None:
+    try:
+        CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CACHE_PATH.write_text(json.dumps(cache), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _fingerprint(run: dict) -> str:
+    """What must match for a cached entry to still be valid."""
+    return f"{run.get('state')}|{run.get('end_date')}"
+
+
 def dag_runs(dag_id: str = DAG_ID) -> list[dict]:
     """Most recent runs first. dag_id is POSITIONAL."""
-    return _json(_astro("dags", "list-runs", dag_id, "-o", "json"))[:MAX_RUNS]
+    if "runs" not in _pass:
+        _pass["runs"] = _json(_astro("dags", "list-runs", dag_id, "-o", "json"))[:MAX_RUNS]
+    return _pass["runs"]
 
 
 def task_states(dag_id: str, run_id: str) -> list[dict]:
-    return _json(_astro("tasks", "states-for-dag-run", dag_id, run_id, "-o", "json"))
+    seen = _pass.setdefault("states", {})
+    if run_id in seen:
+        return seen[run_id]
+
+    run = next((r for r in dag_runs(dag_id) if r.get("run_id") == run_id), {})
+    fingerprint = _fingerprint(run)
+    cache = _cache_for_pass(dag_id)
+
+    entry = cache.get(run_id)
+    if entry and entry.get("fingerprint") == fingerprint:
+        seen[run_id] = entry["states"]
+        return entry["states"]
+
+    states = _json(_astro("tasks", "states-for-dag-run", dag_id, run_id, "-o", "json"))
+    seen[run_id] = states
+
+    if run.get("state") in TERMINAL_RUN_STATES:
+        cache[run_id] = {"fingerprint": fingerprint, "states": states}
+        _write_cache(cache)
+    return states
+
+
+def _cache_for_pass(dag_id: str) -> dict:
+    """The disk cache, loaded once per pass and pruned to runs Airflow still has.
+
+    Pruning happens on LOAD rather than on write. Doing it on write meant a pass
+    that read everything from cache -- the common case, and the whole point --
+    never pruned at all, so entries for runs Airflow had dropped lived forever.
+    """
+    if "cache" not in _pass:
+        cache = _read_cache()
+        live = {r.get("run_id") for r in dag_runs(dag_id)}
+        pruned = {k: v for k, v in cache.items() if k in live}
+        if len(pruned) != len(cache):
+            _write_cache(pruned)
+        _pass["cache"] = pruned
+    return _pass["cache"]
 
 
 def _matching(task_id: str, hints: tuple[str, ...]) -> bool:

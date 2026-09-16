@@ -35,17 +35,28 @@ ASTRO_PINNED = "1.42.1"
 ASTRO_PINNED_MINOR = "1.42."
 ASTRO_RUNTIME_IMAGE = "astrocrpublic.azurecr.io/runtime:3.3-2"
 
-# macOS. Verified 2026-08-15 against the tap formula index and astro@1.42.1.rb.
-# The versioned formula lives in astronomer/homebrew-tap, NOT homebrew-core:
-# core is on 1.45.0 and publishes no versioned formulae, so plain
-# `brew install astro` is wrong twice over -- off-pin AND it pulls Podman.
-# The tap formula declares podman as :recommended, which is what makes
-# --without-podman a valid option. See docs/version-verification.md.
+# macOS. The download leads, because Homebrew has broken this instruction twice:
+# `brew install astro@1.42.1` fails ("No available formula" -- the pinned formula
+# is in astronomer/tap, not core), and then `--without-podman` was REMOVED --
+# current Homebrew rejects it at argument parsing with `invalid option` (D-066).
+#
+# The tap formula still declares `depends_on "podman" => :recommended`, which is
+# what used to generate that flag. Reading the formula is how the wrong command
+# got documented in the first place; the tarball plus its checksum does not move.
+ASTRO_DARWIN_SHA256 = {
+    "arm64": "87c25a9652b420f47c067a80671cdf48bfc6607f2dc13d198a6f75addc34c026",
+    "amd64": "5346b505c5bb63dbe96092cc385716cc3f0106519df3c8e49e6b647498c6366d",
+}
+
 ASTRO_INSTALL_HINT_MACOS = (
-    f"        brew install astronomer/tap/astro@{ASTRO_PINNED} --without-podman\n"
+    f"        curl -sSLo /tmp/astro.tgz https://github.com/astronomer/astro-cli/releases/download/v{ASTRO_PINNED}/astro_{ASTRO_PINNED}_darwin_arm64.tar.gz\n"
+    f"        shasum -a 256 /tmp/astro.tgz   # expect {ASTRO_DARWIN_SHA256['arm64'][:16]}...\n"
+    "        tar -xzf /tmp/astro.tgz -C /tmp astro\n"
+    "        sudo mv /tmp/astro /usr/local/bin/astro\n"
     f"        docker pull {ASTRO_RUNTIME_IMAGE}\n"
-    "      If Homebrew rejects the option, install the binary directly:\n"
-    f"        https://github.com/astronomer/astro-cli/releases/tag/v{ASTRO_PINNED}"
+    f"      Intel Mac: astro_{ASTRO_PINNED}_darwin_amd64.tar.gz\n"
+    "      Homebrew works too, WITHOUT --without-podman (current Homebrew rejects it):\n"
+    f"        brew install astronomer/tap/astro@{ASTRO_PINNED}"
 )
 
 # Windows. Verified 2026-09-15 against astronomer.io/docs/astro/cli/install-cli,
@@ -60,9 +71,10 @@ ASTRO_INSTALL_HINT_MACOS = (
 # The script route also needs no administrator rights, which matters more in a
 # room of corporate laptops than the package manager does.
 #
-# `--skip-dependencies` on the winget line is the exact analogue of Homebrew's
-# --without-podman: since CLI 1.32.0 both package managers pull Podman in as the
-# default engine, and this course is Docker throughout (D-002, D-023).
+# `--skip-dependencies` on the winget line declines Podman, which both package
+# managers have installed as the default engine since CLI 1.32.0. Homebrew's
+# equivalent was removed (D-066), which is one reason macOS downloads instead.
+# This course is Docker throughout (D-002, D-023).
 ASTRO_INSTALL_HINT_WINDOWS = (
     "        powershell -ExecutionPolicy Bypass -File .\\setup-windows.ps1\n"
     "      That installs uv and astro with no package manager and no admin.\n"
@@ -747,6 +759,7 @@ def verify(
     else:
         todo = checks.CHECKS
     _flush(cfg)
+    checks.begin_pass()
     results = [(c, c.run(cfg)) for c in todo]
     sent = _report(cfg, results)
     passed = sum(1 for _, r in results if r.ok)
@@ -761,6 +774,12 @@ def watch(interval: int = typer.Option(20, min=5, help="Seconds between passes")
 
     Teams do not remember to run verify, and a dashboard that lags reality is
     worse than none -- it sends the instructor to the wrong table.
+
+    A pass takes a few seconds once the Airflow run history is cached; the FIRST
+    pass on a machine with a lot of runs takes tens of seconds, because every
+    `astro dev run` is a container exec at ~3s and Airflow's CLI has no bulk form
+    for reading task states. The loop sleeps `interval` AFTER each pass, so the
+    effective period is pass + interval.
     """
     cfg = _cfg()
     typer.echo(f"watching every {interval}s as {cfg.team_id} (Ctrl-C to stop)")
@@ -768,6 +787,7 @@ def watch(interval: int = typer.Option(20, min=5, help="Seconds between passes")
         try:
             _flush(cfg)
             before = state.earned()
+            checks.begin_pass()
             results = [(c, c.run(cfg)) for c in checks.CHECKS]
             _report(cfg, results, quiet=True)
             for name in sorted(state.earned() - before):

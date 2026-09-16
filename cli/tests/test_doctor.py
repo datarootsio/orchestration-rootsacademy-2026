@@ -117,12 +117,13 @@ def test_demands_astro_once_the_airflow_project_exists(workdir, happy_externals)
     assert result.exit_code == 1
     assert "astro not found" in result.output
 
-    # The full tap-qualified command. An earlier version of this test asserted
-    # only "without-podman", which the WRONG command (`brew install astro@1.42.1`,
-    # a formula that does not exist) also satisfied -- so the suite stayed green
-    # while the instruction was unusable.
-    assert "astronomer/tap/astro@1.42.1" in result.output
-    assert "--without-podman" in result.output
+    # It must name something a participant can actually run. This assertion has
+    # been wrong twice: first it checked only "without-podman" (which the
+    # non-existent `brew install astro@1.42.1` formula also satisfied), then it
+    # required that flag -- which current Homebrew rejects outright (D-066).
+    # Now it checks the download, which is the path that does not move.
+    assert "releases/download/v1.42.1" in result.output
+    assert "shasum -a 256" in result.output
     assert "brew install astro@" not in result.output, "must not suggest the core formula"
 
 
@@ -384,10 +385,30 @@ def test_windows_leads_with_the_no_package_manager_path():
     assert "arm64" in hint
 
 
-def test_macos_still_gets_the_tap_formula():
+def test_macos_leads_with_the_direct_download():
+    """This test used to assert `--without-podman` was PRESENT, which is how a
+    command that current Homebrew rejects outright stayed in the docs: it checked
+    that my documentation matched itself, not that it worked.
+
+    Homebrew has now broken this instruction twice (D-066), so the download
+    leads: a published tarball with a checksum does not change under you.
+    """
     hint = main.astro_install_hint("darwin")
-    assert "brew install astronomer/tap/astro@1.42.1 --without-podman" in hint
+    assert "releases/download/v1.42.1/astro_1.42.1_darwin_arm64.tar.gz" in hint
+    assert "shasum -a 256" in hint
+    assert hint.index("curl") < hint.index("brew"), "the download must lead"
     assert "winget" not in hint
+
+
+def test_no_platform_hint_suggests_a_flag_homebrew_rejects():
+    """`brew install --without-podman <anything>` fails at argument parsing on
+    current Homebrew -- it never reaches the formula. Suggesting it hands every
+    macOS participant an error on their first command."""
+    for platform in ("darwin", "win32", "linux"):
+        hint = main.astro_install_hint(platform)
+        assert "--without-podman" not in hint.replace(
+            "WITHOUT --without-podman", ""
+        ), f"{platform} hint suggests a flag Homebrew rejects"
 
 
 def test_linux_gets_neither():

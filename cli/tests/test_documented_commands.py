@@ -195,3 +195,53 @@ def test_concepts_does_not_contradict_the_shipped_dagster_stub():
         encoding="utf-8"
     )
     assert "NOT by taking" in stub, "the stub no longer warns about this; re-check CONCEPTS.md"
+
+
+# ------------------------------- the question bank matches the mission briefs
+
+
+def _brief_questions() -> list[tuple[str, str]]:
+    """(mission, question) for every bolded question in a brief's debrief block.
+
+    Only the bolded lines: those are the ones an instructor reads out. The
+    follow-ups and write-downs are italic and are covered by the bank too, but
+    the bolded ones are what must never drift.
+    """
+    out = []
+    for doc in sorted((REPO / "missions").glob("[AD][0-9].md")):
+        text = doc.read_text(encoding="utf-8")
+        if "## Think about this" not in text:
+            continue
+        block = text.split("## Think about this", 1)[1]
+        for raw in re.findall(r"\*\*(.+?)\*\*", block, re.S):
+            q = " ".join(raw.split())
+            if q.endswith("?"):
+                out.append((doc.stem, q))
+    return out
+
+
+def test_the_briefs_actually_ask_questions():
+    found = _brief_questions()
+    assert len(found) >= 7, f"only found {len(found)} -- check the parser, not the briefs"
+
+
+def test_every_mission_question_is_answered_in_the_guide():
+    """A brief's question reworded without updating the bank leaves an instructor
+    asking something that is not on their sheet, in front of the team.
+
+    Matched on a distinctive fragment rather than the whole sentence: the guide
+    reflows its quotes across lines, and requiring byte-identical text would fail
+    for formatting rather than for drift.
+    """
+    guide = " ".join((REPO / "docs" / "instructor-guide.md").read_text(encoding="utf-8").split())
+    missing = []
+    for mission, question in _brief_questions():
+        # The last six words are specific enough to identify the question and
+        # short enough to survive rewrapping.
+        tail = " ".join(question.rstrip("?").split()[-6:])
+        if tail.lower() not in guide.lower():
+            missing.append(f"{mission}: …{tail}?")
+    assert not missing, (
+        "mission questions with no answer in the guide's question bank:\n  "
+        + "\n  ".join(missing)
+    )

@@ -193,5 +193,20 @@ SUBMITTED = {"stale_delivery_detected", "rebuild_justified", "comparison_submitt
 BY_MILESTONE = {c.milestone: c for c in CHECKS}
 
 
+def begin_pass() -> None:
+    """Start one check pass.
+
+    The Airflow probes memoise `astro dev run` output for the duration of a pass
+    -- four probes asking for the same run history is four times the container
+    execs for identical data. This is what bounds that memo, so `roots watch`
+    still sees runs made since it started.
+
+    The Dagster probes read the event log directly and need nothing.
+    """
+    from .probes import airflow_probes  # noqa: PLC0415 - import cost is real here
+
+    airflow_probes.begin_pass()
+
+
 def for_mission(mission: str) -> list[Check]:
     return [c for c in CHECKS if c.mission.upper() == mission.upper()]
