@@ -1,0 +1,33 @@
+[project]
+name = "roots-cli"
+version = "1.0.0"
+description = "Participant CLI for the Rootsmarkt orchestration course"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.15",
+    "pyyaml>=6.0",
+    "rootsmarkt-processing",
+]
+
+[project.scripts]
+roots = "roots.main:main"
+
+[project.optional-dependencies]
+# The instructor repo also lists `rootsmarkt-lab` here, to run the client tests
+# against a real lab server over a real socket. That package lives in `lab/`,
+# which does not ship -- so it is removed rather than left pointing at a path
+# that does not exist and breaking `uv sync`.
+dev = ["pytest>=8.3"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/roots"]
+
+[tool.uv.sources]
+rootsmarkt-processing = { path = "../packages/rootsmarkt-processing", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

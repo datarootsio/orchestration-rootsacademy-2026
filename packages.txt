@@ -1,0 +1,2 @@
+# OS-level packages for the Airflow image. Nothing needed: the sealed processing
+# layer is pure Python plus psycopg, which ships wheels.

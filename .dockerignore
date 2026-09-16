@@ -1,0 +1,25 @@
+# Without this, `astro dev start` copies the venvs and every data file into the
+# build context and the first build eats the Airflow block's time buffer.
+.venv/
+*/.venv/
+**/__pycache__/
+**/*.pyc
+
+# The other runtime, and the lab. None of it belongs in the Airflow image.
+dagster/
+lab/
+cli/
+docs/
+prompts/
+skills/
+solutions/
+
+# Local state
+.dagster/
+.roots/
+data/
+.git/
+.pytest_cache/
+**/.pytest_cache/
+uv.lock
+team-configs/
