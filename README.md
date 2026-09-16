@@ -28,6 +28,12 @@ Six steps, in this order. Each one tells you how to know it worked.
 > invocations, not shell syntax. [`WINDOWS-SETUP.md`](WINDOWS-SETUP.md) has the
 > full walkthrough.
 
+Run the setup commands from the repository directory:
+
+```bash
+cd orchestration-rootsacademy-2026
+```
+
 ---
 
 ## Step 1 — Install the prerequisites
@@ -66,8 +72,7 @@ one step:
    `& "$HOME\Downloads\Docker Desktop Installer.exe" install --user`.
    Open it and leave it running.
 
-3. **Do Step 2 below (clone the repo) now**, then come back here and run, from
-   inside it:
+3. **From the repository directory**, run:
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\setup-windows.ps1
    ```
@@ -102,22 +107,7 @@ astro version                                 # 1.42.1
 
 ---
 
-## Step 2 — Get the repository
-
-```bash
-git clone <the URL your instructor gave you> rootsmarkt-orchestration
-cd rootsmarkt-orchestration
-```
-
-Keep the path **short and local** — `C:\dev\...` or `~/dev/...`. Not a network
-drive, not OneDrive, not a folder twelve levels deep. Windows has a
-260-character path limit that Docker mounts can hit.
-
-**✓ Done when** `ls` (or `dir`) shows `missions/`, `dags/` and `pyproject.toml`.
-
----
-
-## Step 3 — Install the Python environment
+## Step 2 — Install the Python environment
 
 ```bash
 uv sync
@@ -140,7 +130,7 @@ it and re-run.
 
 ---
 
-## Step 4 — Join your team
+## Step 3 — Join your team
 
 Your instructor gives you a **join code** — six characters, like `RMEETP`.
 
@@ -177,7 +167,7 @@ it two different ways. Never edit either by hand — if something is wrong, run
 
 ---
 
-## Step 5 — Pre-flight check
+## Step 4 — Pre-flight check
 
 ```bash
 uv run --env-file .env roots doctor
@@ -198,7 +188,7 @@ setup early.
 
 ---
 
-## Step 6 — Start the runtimes
+## Step 5 — Start the runtimes
 
 Three things run at once, so you need **three terminal windows**, all in the
 repository directory. Leave all three running for the whole course.
